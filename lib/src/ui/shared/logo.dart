@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
-const String kSkaletekLogoUrl =
+const String kDefaultLogoUrl =
     'https://kyc.dev.skaletek.io/assets/skaletek_mobile-BsaITLA5.svg';
 
 class KYCLogo extends StatelessWidget {
@@ -13,31 +13,28 @@ class KYCLogo extends StatelessWidget {
   const KYCLogo({
     super.key,
     this.logoUrl,
-    this.width = 150,
+    this.width = 120,
     this.height = 30,
     this.fallbackText,
   });
 
-  bool get _isSvg => (logoUrl ?? '').toLowerCase().endsWith('.svg');
-
   @override
   Widget build(BuildContext context) {
-    if (logoUrl == null || logoUrl!.isEmpty) {
-      return _buildSkaletekLogo();
-    }
-    if (_isSvg) {
+    final String url = (logoUrl == null || logoUrl!.isEmpty)
+        ? kDefaultLogoUrl
+        : logoUrl!;
+    if (url.toLowerCase().endsWith('.svg')) {
       return SizedBox(
         width: width,
         height: height,
         child: Align(
           alignment: Alignment.centerLeft,
           child: SvgPicture.network(
-            logoUrl!,
+            url,
             fit: BoxFit.contain,
             placeholderBuilder: (context) => _buildLoadingLogo(),
             width: width,
             height: height,
-            // If SVG fails, show Skaletek logo
             errorBuilder: (context, error, stackTrace) => _buildSkaletekLogo(),
           ),
         ),
@@ -46,19 +43,17 @@ class KYCLogo extends StatelessWidget {
     return Container(
       width: width,
       height: height,
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: Image.network(
-          logoUrl!,
-          fit: BoxFit.contain,
-          errorBuilder: (context, error, stackTrace) {
-            return _buildSkaletekLogo();
-          },
-          loadingBuilder: (context, child, loadingProgress) {
-            if (loadingProgress == null) return child;
-            return _buildLoadingLogo();
-          },
-        ),
+      alignment: Alignment.centerLeft,
+      child: Image.network(
+        url,
+        fit: BoxFit.contain,
+        errorBuilder: (context, error, stackTrace) {
+          return _buildSkaletekLogo();
+        },
+        loadingBuilder: (context, child, loadingProgress) {
+          if (loadingProgress == null) return child;
+          return _buildLoadingLogo();
+        },
       ),
     );
   }
@@ -68,7 +63,7 @@ class KYCLogo extends StatelessWidget {
       width: width,
       height: height,
       child: SvgPicture.network(
-        kSkaletekLogoUrl,
+        kDefaultLogoUrl,
         fit: BoxFit.contain,
         placeholderBuilder: (context) => _buildLoadingLogo(),
         width: width,
