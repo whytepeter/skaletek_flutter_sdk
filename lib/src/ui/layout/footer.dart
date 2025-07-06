@@ -7,6 +7,7 @@ class KYCFooter extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(20),
+
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [

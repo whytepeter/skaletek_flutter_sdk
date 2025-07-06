@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:skaletek_kyc_flutter/skaletek_kyc_flutter.dart';
+import 'package:skaletek_kyc_flutter/src/ui/layout/body.dart';
 import 'layout/header.dart';
 import 'layout/content.dart';
 import 'layout/footer.dart';
@@ -21,11 +22,12 @@ class _KYCVerificationScreenState extends State<KYCVerificationScreen> {
 
     return Scaffold(
       backgroundColor: Colors.white,
+      extendBodyBehindAppBar: true,
       appBar: KYCHeader(
         logoUrl: widget.config.customization.logoUrl,
         onClose: () => Navigator.of(context).maybePop(),
       ),
-      body: SingleChildScrollView(child: Placeholder()),
+      body: KYCBody(),
       bottomNavigationBar: KYCFooter(),
     );
   }

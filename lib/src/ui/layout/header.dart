@@ -17,12 +17,12 @@ class KYCHeader extends StatelessWidget implements PreferredSizeWidget {
   @override
   Widget build(BuildContext context) {
     return AppBar(
-      backgroundColor: Colors.grey[100],
-      elevation: 0,
+      backgroundColor: Colors.white,
+
       automaticallyImplyLeading: false,
       title: Row(
         children: [
-          KYCLogo(logoUrl: logoUrl ?? kDefaultLogoUrl, width: 100, height: 30),
+          KYCLogo(logoUrl: logoUrl ?? kDefaultLogoUrl),
           const Spacer(),
         ],
       ),

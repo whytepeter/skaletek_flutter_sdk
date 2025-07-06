@@ -13,8 +13,8 @@ class KYCLogo extends StatelessWidget {
   const KYCLogo({
     super.key,
     this.logoUrl,
-    this.width = 120,
-    this.height = 40,
+    this.width = 150,
+    this.height = 30,
     this.fallbackText,
   });
 
@@ -29,30 +29,36 @@ class KYCLogo extends StatelessWidget {
       return SizedBox(
         width: width,
         height: height,
-        child: SvgPicture.network(
-          logoUrl!,
-          fit: BoxFit.contain,
-          placeholderBuilder: (context) => _buildLoadingLogo(),
-          width: width,
-          height: height,
-          // If SVG fails, show Skaletek logo
-          errorBuilder: (context, error, stackTrace) => _buildSkaletekLogo(),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: SvgPicture.network(
+            logoUrl!,
+            fit: BoxFit.contain,
+            placeholderBuilder: (context) => _buildLoadingLogo(),
+            width: width,
+            height: height,
+            // If SVG fails, show Skaletek logo
+            errorBuilder: (context, error, stackTrace) => _buildSkaletekLogo(),
+          ),
         ),
       );
     }
     return Container(
       width: width,
       height: height,
-      child: Image.network(
-        logoUrl!,
-        fit: BoxFit.contain,
-        errorBuilder: (context, error, stackTrace) {
-          return _buildSkaletekLogo();
-        },
-        loadingBuilder: (context, child, loadingProgress) {
-          if (loadingProgress == null) return child;
-          return _buildLoadingLogo();
-        },
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Image.network(
+          logoUrl!,
+          fit: BoxFit.contain,
+          errorBuilder: (context, error, stackTrace) {
+            return _buildSkaletekLogo();
+          },
+          loadingBuilder: (context, child, loadingProgress) {
+            if (loadingProgress == null) return child;
+            return _buildLoadingLogo();
+          },
+        ),
       ),
     );
   }
