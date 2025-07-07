@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:skaletek_kyc_flutter/src/ui/shared/typography.dart';
 
 class KYCFooter extends StatelessWidget {
   const KYCFooter({super.key});
@@ -11,9 +12,15 @@ class KYCFooter extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Text('© Skaletek', style: TextStyle(color: Colors.grey[600])),
+          StyledText(
+            '© Skaletek',
+            style: TextStyle(color: Colors.grey[600], fontSize: 12),
+          ),
           SizedBox(width: 10),
-          Text('Privacy Policy', style: TextStyle(color: Colors.grey[600])),
+          StyledText(
+            'Privacy Policy',
+            style: TextStyle(color: Colors.grey[600], fontSize: 12),
+          ),
         ],
       ),
     );

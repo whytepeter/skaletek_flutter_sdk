@@ -18,7 +18,7 @@ class KYCBody extends StatelessWidget {
             fit: BoxFit.cover,
           ),
         ),
-        child: SingleChildScrollView(child: child ?? Container()),
+        child: child ?? Container(),
       ),
     );
   }

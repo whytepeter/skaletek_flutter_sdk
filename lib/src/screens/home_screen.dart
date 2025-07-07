@@ -20,7 +20,7 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     await SkaletekKYC.instance.startVerification(
-      token: "your_auth_token_here", // Replace with actual token
+      token: "96315c9084ff47d991a22890a6b28533", // Replace with actual token
       userInfo: {
         "first_name": "John",
         "last_name": "Doe",

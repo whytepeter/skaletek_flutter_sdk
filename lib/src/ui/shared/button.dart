@@ -60,6 +60,7 @@ class KYCButton extends StatelessWidget {
     final ButtonStyle style = ButtonStyle(
       backgroundColor: WidgetStateProperty.resolveWith(resolveBg),
       foregroundColor: WidgetStateProperty.resolveWith(resolveFg),
+      surfaceTintColor: WidgetStateProperty.all(Colors.transparent),
       side: WidgetStateProperty.resolveWith(resolveSide),
       shape: WidgetStateProperty.all(
         RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),

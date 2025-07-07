@@ -18,6 +18,7 @@ class KYCHeader extends StatelessWidget implements PreferredSizeWidget {
     Future<void> showCloseConfirmation() async {
       final navigator = Navigator.of(context);
       final shouldClose = await showDialog<bool>(
+        barrierDismissible: false,
         context: context,
         builder: (context) => KYCAlert(
           title: 'Exit Verification?',

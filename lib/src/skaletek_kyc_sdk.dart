@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'models/kyc_config.dart';
 import 'models/kyc_result.dart';
 import 'models/kyc_user_info.dart';
 import 'models/kyc_customization.dart';
-import 'services/kyc_service.dart';
+import 'services/kyc_state_provider.dart';
 import 'ui/kyc_verification_screen.dart';
 
 class SkaletekKYC {
@@ -12,8 +13,6 @@ class SkaletekKYC {
   SkaletekKYC._internal();
 
   static SkaletekKYC get instance => _instance;
-
-  final KYCService _kycService = KYCService();
 
   /// Starts the KYC verification process
   ///
@@ -42,13 +41,16 @@ class SkaletekKYC {
         customization: kycCustomization,
       );
 
-      // Initialize the service
-      await _kycService.initialize(config);
+      // Reset KYC state for new verification
+      await resetKYCState();
 
-      // Navigate to verification screen
+      // Navigate to verification screen with provider
       final result = await Navigator.of(_getCurrentContext()).push<KYCResult>(
         MaterialPageRoute(
-          builder: (context) => KYCVerificationScreen(config: config),
+          builder: (context) => ChangeNotifierProvider(
+            create: (context) => KYCStateProvider(),
+            child: KYCVerificationScreen(config: config),
+          ),
         ),
       );
 
@@ -77,11 +79,15 @@ class SkaletekKYC {
         customization: customization,
       );
 
-      await _kycService.initialize(config);
+      // Reset KYC state for new verification
+      await resetKYCState();
 
       final result = await Navigator.of(_getCurrentContext()).push<KYCResult>(
         MaterialPageRoute(
-          builder: (context) => KYCVerificationScreen(config: config),
+          builder: (context) => ChangeNotifierProvider(
+            create: (context) => KYCStateProvider(),
+            child: KYCVerificationScreen(config: config),
+          ),
         ),
       );
 
@@ -93,6 +99,11 @@ class SkaletekKYC {
     } catch (e) {
       onComplete(false, {'error': e.toString()});
     }
+  }
+
+  /// Reset KYC state (useful for testing)
+  Future<void> resetKYCState() async {
+    await KYCStateProvider().resetState();
   }
 
   void _validateInputs(
