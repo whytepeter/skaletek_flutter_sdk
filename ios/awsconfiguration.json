@@ -1,0 +1,13 @@
+{
+  "Version": "1.0",
+  "IdentityManager": {
+    "Default": {}
+  },
+  "CognitoUserPool": {
+    "Default": {
+      "PoolId": "us-east-1_FehFyxxgl",
+      "AppClientId": "35kf8tf8elf3t015p5ihkuob43",
+      "Region": "us-east-1"
+    }
+  }
+}

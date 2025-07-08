@@ -14,8 +14,17 @@ enum KYCStep { document, liveness }
 
 class KYCVerificationScreen extends StatefulWidget {
   final KYCConfig config;
+  final VoidCallback? onNext;
+  final VoidCallback? onBack;
+  final Function(bool success, Map<String, dynamic> data)? onComplete;
 
-  const KYCVerificationScreen({super.key, required this.config});
+  const KYCVerificationScreen({
+    super.key,
+    required this.config,
+    this.onNext,
+    this.onBack,
+    this.onComplete,
+  });
 
   @override
   State<KYCVerificationScreen> createState() => _KYCVerificationScreenState();
@@ -41,8 +50,31 @@ class _KYCVerificationScreenState extends State<KYCVerificationScreen> {
         listen: false,
       );
 
-      // Initialize service with state provider
-      await _kycService.initialize(widget.config, stateProvider: stateProvider);
+      // Initialize service with state provider and error handlers
+      await _kycService.initialize(
+        widget.config,
+        stateProvider: stateProvider,
+        onComplete: widget.onComplete,
+        onError: () {
+          if (mounted) {
+            Navigator.of(context).pop();
+          }
+        },
+        onShowSnackbar: (String message) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  message,
+                  style: TextStyle(fontWeight: FontWeight.w500),
+                ),
+                backgroundColor: AppColor.error,
+                duration: Duration(seconds: 4),
+              ),
+            );
+          }
+        },
+      );
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -71,11 +103,15 @@ class _KYCVerificationScreenState extends State<KYCVerificationScreen> {
   Widget _getCurrentStepWidget() {
     switch (currentStep) {
       case KYCStep.document:
-        return KYCDocumentUpload(onNext: _goToNextStep);
+        return KYCDocumentUpload(
+          onNext: _goToNextStep,
+          kycService: _kycService,
+        );
       case KYCStep.liveness:
         return KYCFaceVerification(
           onBack: _goToPreviousStep,
           onNext: _goToNextStep,
+          kycService: _kycService,
         );
     }
   }

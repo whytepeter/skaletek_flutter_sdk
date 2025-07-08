@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:skaletek_kyc_flutter/src/services/kyc_service.dart';
 import 'package:skaletek_kyc_flutter/src/ui/layout/content.dart';
 import 'package:skaletek_kyc_flutter/src/ui/shared/button.dart';
-import 'package:skaletek_kyc_flutter/src/ui/shared/document_demo.dart';
-import 'package:skaletek_kyc_flutter/src/ui/shared/dos_and_donts.dart';
 
 class KYCDocumentUpload extends StatelessWidget {
-  const KYCDocumentUpload({super.key, this.onNext});
+  const KYCDocumentUpload({super.key, this.onNext, required this.kycService});
   final VoidCallback? onNext;
+  final KYCService kycService;
 
   @override
   Widget build(BuildContext context) {

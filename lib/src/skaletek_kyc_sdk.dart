@@ -49,7 +49,10 @@ class SkaletekKYC {
         MaterialPageRoute(
           builder: (context) => ChangeNotifierProvider(
             create: (context) => KYCStateProvider(),
-            child: KYCVerificationScreen(config: config),
+            child: KYCVerificationScreen(
+              config: config,
+              onComplete: onComplete,
+            ),
           ),
         ),
       );
@@ -86,7 +89,10 @@ class SkaletekKYC {
         MaterialPageRoute(
           builder: (context) => ChangeNotifierProvider(
             create: (context) => KYCStateProvider(),
-            child: KYCVerificationScreen(config: config),
+            child: KYCVerificationScreen(
+              config: config,
+              onComplete: onComplete,
+            ),
           ),
         ),
       );

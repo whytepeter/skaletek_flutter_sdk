@@ -8,6 +8,8 @@ class AppColor {
   static Color text = const Color(0xFF202939);
   static Color textLight = const Color(0xFF4B5565);
   static Color lightBlue = const Color(0xFFEEF2F6);
+  static Color background = const Color(0xFFFCFCFD);
+  static Color error = const Color(0xFFD92C20);
 
   static void init(KYCCustomization customization, {Color? fallback}) {
     final hex = customization.primaryColor;

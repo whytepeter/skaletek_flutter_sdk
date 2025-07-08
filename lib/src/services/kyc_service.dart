@@ -18,12 +18,23 @@ class KYCService {
   KYCStateProvider? _stateProvider;
   final ImagePicker _imagePicker = ImagePicker();
 
+  // Global error handler callback
+  Function(bool success, Map<String, dynamic> data)? _onComplete;
+  VoidCallback? _onError;
+  Function(String message)? _onShowSnackbar;
+
   Future<void> initialize(
     KYCConfig config, {
     KYCStateProvider? stateProvider,
+    Function(bool success, Map<String, dynamic> data)? onComplete,
+    VoidCallback? onError,
+    Function(String message)? onShowSnackbar,
   }) async {
     _config = config;
     _stateProvider = stateProvider;
+    _onComplete = onComplete;
+    _onError = onError;
+    _onShowSnackbar = onShowSnackbar;
 
     // Save session token to global state
     if (_stateProvider != null) {
@@ -48,69 +59,60 @@ class KYCService {
   Future<PresignedUrl?> _fetchPresignedUrlInBackground() async {
     if (_stateProvider == null || _config == null) return null;
 
-    try {
-      // Set loading state
-      await _stateProvider!.setLoadingPresignedUrl(true);
+    return await _safeApiCall(() async {
+          // Set loading state
+          await _stateProvider!.setLoadingPresignedUrl(true);
 
-      if (kDebugMode) {
-        print('Fetching presigned URLs...');
-      }
+          log('Fetching presigned URLs...');
 
-      // Fetch presigned URLs
-      final presignedUrl = await getPresignedUrls(_config!.token);
+          // Fetch presigned URLs
+          final presignedUrl = await getPresignedUrls(_config!.token);
 
-      if (kDebugMode) {
-        print('Presigned URL response: ${presignedUrl.toMap()}');
-      }
+          log('Presigned URL response: ${presignedUrl.toMap()}');
 
-      // Save to global state
-      await _stateProvider!.setPresignedUrl(presignedUrl);
-      return presignedUrl;
-    } catch (e) {
-      if (kDebugMode) {
-        print('Error fetching presigned URLs: $e');
-      }
-      return null;
-    } finally {
-      // Clear loading state
-      await _stateProvider!.setLoadingPresignedUrl(false);
-    }
+          // Save to global state
+          await _stateProvider!.setPresignedUrl(presignedUrl);
+          return presignedUrl;
+        }, context: 'fetchPresignedUrls') ??
+        null;
   }
 
   /// Create a liveness session
-  Future<String> createSession({required String sessionToken}) async {
-    try {
-      final uri = Uri.parse('$_baseUrl/liveness');
-      final response = await http.post(
-        uri,
-        headers: {
-          'Authorization': 'Bearer $sessionToken',
-          'Content-Type': 'application/json',
-        },
-      );
+  Future<String?> createSession() async {
+    log('config: $_config');
+    if (_config?.token.isEmpty ?? true) return null;
 
-      final data = json.decode(response.body);
-      final livenessToken = data['liveness_token'];
+    return await _safeApiCall(() async {
+          log('Creating liveness session...');
+          final uri = Uri.parse('$_baseUrl/liveness');
+          final response = await http.post(
+            uri,
+            headers: {
+              'Authorization': 'Bearer ${_config!.token}',
+              'Content-Type': 'application/json',
+            },
+          );
 
-      if (livenessToken == null || livenessToken.isEmpty) {
-        throw SessionError('Could not get liveness token');
-      }
+          log('Liveness session response: ${response.body}');
 
-      return livenessToken;
-    } catch (e) {
-      if (e is SessionError) rethrow;
+          final data = json.decode(response.body);
+          final livenessToken = data['liveness_token'];
 
-      try {
-        final errorData = json.decode(e.toString());
-        final message =
-            errorData['message'] ??
-            errorData['liveness_error'] ??
-            'An error occurred';
-        throw SessionError(message, redirectUrl: errorData['redirect_url']);
-      } catch (_) {
-        throw SessionError('An error occurred');
-      }
+          if (livenessToken == null || livenessToken.isEmpty) {
+            throw SessionError('Could not get liveness token');
+          }
+
+          return livenessToken;
+        }, context: 'createSession') ??
+        null;
+  }
+
+  /// Get the current session token
+  Future<String?> getSessionToken() async {
+    if (_stateProvider != null) {
+      return _stateProvider!.sessionToken;
     }
+    return _config?.token;
   }
 
   /// Get liveness result
@@ -119,6 +121,7 @@ class KYCService {
     required String sessionToken,
   }) async {
     try {
+      log('Getting liveness result...');
       final uri = Uri.parse('$_baseUrl/liveness/result');
       final response = await http.post(
         uri,
@@ -128,6 +131,8 @@ class KYCService {
         },
         body: json.encode({'liveness_token': livenessToken}),
       );
+
+      log('Liveness result response: ${response.body}');
 
       final data = json.decode(response.body);
       final success = data['success'] ?? false;
@@ -157,6 +162,7 @@ class KYCService {
   /// Verify identity
   Future<String> verifyIdentity({required String sessionToken}) async {
     try {
+      log('Verifying identity...');
       final uri = Uri.parse('$_baseUrl/verify/');
       final response = await http.post(
         uri,
@@ -165,6 +171,8 @@ class KYCService {
           'Content-Type': 'application/json',
         },
       );
+
+      log('Verify identity response: ${response.body}');
 
       final data = json.decode(response.body);
       final redirectUrl = data['redirect_url'];
@@ -191,6 +199,7 @@ class KYCService {
   /// Get presigned URLs for document upload
   Future<PresignedUrl> getPresignedUrls(String sessionToken) async {
     try {
+      log('Getting presigned URLs...');
       final uri = Uri.parse('$_baseUrl/presign');
       final response = await http.post(
         uri,
@@ -199,6 +208,8 @@ class KYCService {
           'Content-Type': 'application/json',
         },
       );
+
+      log('Presigned URLs response: ${response.body}');
 
       final data = json.decode(response.body);
 
@@ -224,6 +235,7 @@ class KYCService {
   /// Detect document in image
   Future<Map<String, dynamic>?> detectDocument(File file) async {
     try {
+      log('Detecting document...');
       final uri = Uri.parse('$_mlBaseUrl/detection/document');
 
       final request = http.MultipartRequest('POST', uri)
@@ -233,6 +245,8 @@ class KYCService {
       final streamedResponse = await request.send();
       final response = await http.Response.fromStream(streamedResponse);
       final data = json.decode(response.body);
+
+      log('Document detection response: ${response.body}');
 
       final success = data['success'] ?? false;
       final bbox = data['bbox'];
@@ -265,6 +279,7 @@ class KYCService {
   /// Upload front document using presigned URL
   Future<void> uploadFrontDocument(File file, PresignedUrl presignedUrl) async {
     try {
+      log('Uploading front document...');
       final request = http.MultipartRequest(
         'POST',
         Uri.parse(presignedUrl.front.url),
@@ -474,6 +489,50 @@ class KYCService {
       }
     } catch (e) {
       return KYCResult.failure(error: 'Status check failed: $e');
+    }
+  }
+
+  /// Global error handler for all API calls
+  void _handleError(dynamic error, {String? context}) {
+    log('Error in $context: $error');
+
+    if (error is SessionError) {
+      // Handle SessionError with redirect URL
+      if (error.redirectUrl != null) {
+        log('Redirecting to: ${error.redirectUrl}');
+        _onComplete?.call(false, {
+          'error': error.message,
+          'redirectUrl': error.redirectUrl,
+          'context': context,
+        });
+        // Call onError to close the app when there's a redirect URL
+        _onError?.call();
+      } else {
+        // Show snackbar for errors without redirect URL
+        _onShowSnackbar?.call(error.message);
+      }
+    } else {
+      // Show snackbar for other errors
+      _onShowSnackbar?.call(error.toString());
+    }
+  }
+
+  /// Safe API call wrapper
+  Future<T?> _safeApiCall<T>(
+    Future<T> Function() apiCall, {
+    String? context,
+  }) async {
+    try {
+      return await apiCall();
+    } catch (e) {
+      _handleError(e, context: context);
+      return null;
+    }
+  }
+
+  void log(String message) {
+    if (kDebugMode) {
+      print(message);
     }
   }
 }

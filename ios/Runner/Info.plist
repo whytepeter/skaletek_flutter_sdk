@@ -46,7 +46,7 @@
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Camera access needed for ID verification</string>
+	<string>We need access to your camera for face liveness detection.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Photo access needed to select ID documents</string>
 </dict>
