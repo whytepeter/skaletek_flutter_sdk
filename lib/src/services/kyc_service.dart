@@ -50,9 +50,7 @@ class KYCService {
   }
 
   Future<void> _requestPermissions() async {
-    if (_config?.customization.docSrc == 'LIVE') {
-      await Permission.camera.request();
-    }
+    await Permission.camera.request();
     await Permission.photos.request();
   }
 

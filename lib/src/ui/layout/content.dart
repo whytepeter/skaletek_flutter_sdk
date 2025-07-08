@@ -10,7 +10,6 @@ class KYCContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     Widget content = Container(
-      margin: EdgeInsets.only(top: 20),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(20),
         color: Colors.white,
@@ -31,28 +30,32 @@ class KYCContent extends StatelessWidget {
       child: Row(children: [Text('Hey David Omale!')]),
     );
 
-    return SingleChildScrollView(
-      child: Column(
-        children: [
-          Container(
-            margin: EdgeInsets.only(top: 20),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(20),
-              color: AppColor.lightBlue,
-              boxShadow: [
-                BoxShadow(
-                  color: AppColor.lightBlue.withValues(alpha: 0.5),
-                  blurRadius: 10,
-                  offset: Offset(0, 10),
-                  spreadRadius: 10,
+    return SizedBox(
+      child: Expanded(
+        child: SingleChildScrollView(
+          child: Column(
+            children: [
+              Container(
+                margin: EdgeInsets.only(top: 20),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(20),
+                  color: AppColor.lightBlue,
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColor.lightBlue.withValues(alpha: 0.5),
+                      blurRadius: 10,
+                      offset: Offset(0, 10),
+                      spreadRadius: 10,
+                    ),
+                  ],
                 ),
-              ],
-            ),
-            child: Column(children: [header, content]),
+                child: Column(children: [header, content]),
+              ),
+              SizedBox(height: 16),
+              footer ?? Container(),
+            ],
           ),
-          SizedBox(height: 16),
-          footer ?? Container(),
-        ],
+        ),
       ),
     );
   }

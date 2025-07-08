@@ -27,8 +27,6 @@ class _KYCFaceVerificationState extends State<KYCFaceVerification> {
   String _sessionId = '';
   final String _region = 'us-east-1';
   bool _showLivenessDetector = false;
-  bool _showResults = false;
-  Map<String, dynamic> _results = {};
 
   Future<void> _startLivenessCheck() async {
     setState(() {
@@ -55,10 +53,8 @@ class _KYCFaceVerificationState extends State<KYCFaceVerification> {
     }
   }
 
-  void _onLivenessComplete(Map<String, dynamic> results) {
+  void _onLivenessComplete() {
     setState(() {
-      _results = results;
-      _showResults = true;
       _showLivenessDetector = false;
     });
   }
@@ -70,84 +66,6 @@ class _KYCFaceVerificationState extends State<KYCFaceVerification> {
 
     // Show error message
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));
-  }
-
-  Widget _buildResultsView() {
-    final isVerified = _results['verified'] == true;
-
-    return Padding(
-      padding: EdgeInsets.all(16),
-      child: Column(
-        children: [
-          KYCContent(
-            footer: _buildResultsFooter(),
-            child: Container(
-              height: 300,
-              width: double.infinity,
-              child: Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      isVerified
-                          ? Icons.check_circle_outline
-                          : Icons.error_outline,
-                      color: isVerified ? Colors.green : Colors.red,
-                      size: 80,
-                    ),
-                    const SizedBox(height: 20),
-                    Text(
-                      isVerified
-                          ? 'Face liveness verified!'
-                          : 'Face liveness failed',
-                      style: Theme.of(context).textTheme.headlineMedium,
-                    ),
-                    const SizedBox(height: 20),
-                    if (_results.containsKey('confidence')) ...[
-                      Text(
-                        'Confidence: ${(_results['confidence'] * 100).toStringAsFixed(2)}%',
-                        style: Theme.of(context).textTheme.bodyLarge,
-                      ),
-                      const SizedBox(height: 10),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildResultsFooter() {
-    final isVerified = _results['verified'] == true;
-
-    return Row(
-      children: [
-        KYCButton(
-          text: 'Try Again',
-          variant: KYCButtonVariant.outline,
-          onPressed: () {
-            setState(() {
-              _showResults = false;
-              _results = {};
-              _sessionId = '';
-            });
-          },
-        ),
-        const SizedBox(width: 16),
-        Expanded(
-          child: KYCButton(
-            text: isVerified ? 'Continue' : 'Go Back',
-            block: true,
-            onPressed: isVerified
-                ? (widget.onNext ?? () {})
-                : (widget.onBack ?? () {}),
-          ),
-        ),
-      ],
-    );
   }
 
   @override
@@ -162,17 +80,13 @@ class _KYCFaceVerificationState extends State<KYCFaceVerification> {
       );
     }
 
-    if (_showResults) {
-      return _buildResultsView();
-    }
-
     return Padding(
       padding: EdgeInsets.all(16),
       child: Column(
         children: [
           KYCContent(
             footer: _buildFooter(),
-            child: Container(
+            child: SizedBox(
               height: 300,
               width: double.infinity,
               child: _isLoading ? _buildLoading() : _buildDefaultContent(),
