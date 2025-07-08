@@ -4,7 +4,6 @@ import 'package:skaletek_kyc_flutter/skaletek_kyc_flutter.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
-
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }

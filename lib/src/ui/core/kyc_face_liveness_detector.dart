@@ -43,7 +43,7 @@ class _KYCFaceLivenessDetectorState extends State<KYCFaceLivenessDetector> {
   }
 
   Widget _buildLivenessDetectorView() {
-    return Container();
+    return Center(child: Container(child: Text('Liveness detector')));
 
     // return SizedBox(
     //   width: double.infinity,
