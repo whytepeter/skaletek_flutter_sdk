@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:skaletek_kyc_flutter/src/models/kyc_api_models.dart';
 import 'package:skaletek_kyc_flutter/src/models/kyc_user_info.dart';
 import 'package:skaletek_kyc_flutter/src/services/kyc_service.dart';
+import 'package:skaletek_kyc_flutter/src/config/app_config.dart';
 import 'package:skaletek_kyc_flutter/src/ui/core/kyc_face_liveness_detector.dart';
 import 'package:skaletek_kyc_flutter/src/ui/layout/content.dart';
 import 'package:skaletek_kyc_flutter/src/ui/shared/button.dart';
@@ -29,7 +30,6 @@ class KYCFaceVerification extends StatefulWidget {
 class _KYCFaceVerificationState extends State<KYCFaceVerification> {
   bool _isLoading = false;
   String _sessionId = '';
-  final String _region = 'us-east-1';
   bool _showLivenessDetector = false;
 
   Future<void> _startLivenessCheck() async {
@@ -75,12 +75,16 @@ class _KYCFaceVerificationState extends State<KYCFaceVerification> {
   @override
   Widget build(BuildContext context) {
     if (_showLivenessDetector) {
-      return KYCFaceLivenessDetector(
-        sessionId: _sessionId,
-        region: _region,
-        kycService: widget.kycService,
-        onComplete: _onLivenessComplete,
-        onError: _onLivenessError,
+      return Container(
+        height: MediaQuery.of(context).size.height - 120,
+        color: Colors.red,
+        padding: const EdgeInsets.all(16),
+        child: KYCFaceLivenessDetector(
+          sessionId: _sessionId,
+          kycService: widget.kycService,
+          onComplete: _onLivenessComplete,
+          onError: _onLivenessError,
+        ),
       );
     }
 

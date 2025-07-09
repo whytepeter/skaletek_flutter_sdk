@@ -6,13 +6,13 @@ import 'package:permission_handler/permission_handler.dart';
 import '../models/kyc_config.dart';
 import '../models/kyc_result.dart';
 import '../models/kyc_api_models.dart';
+import '../config/app_config.dart';
 import 'kyc_state_provider.dart';
 import 'package:flutter/foundation.dart';
 
 class KYCService {
-  static const String _baseUrl =
-      'https://kyc-api.dev.skaletek.io'; // Replace with actual API URL
-  static const String _mlBaseUrl = 'https://ml.dev.skaletek.io';
+  static const String _baseUrl = AppConfig.kycApiUrl;
+  static const String _mlBaseUrl = AppConfig.mlApiUrl;
 
   KYCConfig? _config;
   KYCStateProvider? _stateProvider;

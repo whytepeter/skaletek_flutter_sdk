@@ -20,7 +20,34 @@ class KYCContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Widget content = Container(
+    return SingleChildScrollView(
+      child: Column(
+        children: [
+          Container(
+            margin: EdgeInsets.only(top: 20),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(20),
+              color: AppColor.lightBlue,
+              boxShadow: [
+                BoxShadow(
+                  color: AppColor.lightBlue.withValues(alpha: 0.5),
+                  blurRadius: 10,
+                  offset: Offset(0, 10),
+                  spreadRadius: 10,
+                ),
+              ],
+            ),
+            child: Column(children: [_buildHeader(), _buildContent()]),
+          ),
+          SizedBox(height: 16),
+          footer ?? Container(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildContent() {
+    return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(20),
         color: Colors.white,
@@ -35,8 +62,10 @@ class KYCContent extends StatelessWidget {
       ),
       child: child ?? Container(),
     );
+  }
 
-    Widget header = Padding(
+  Widget _buildHeader() {
+    return Padding(
       padding: EdgeInsets.all(14),
       child: Row(
         children: [
@@ -60,33 +89,8 @@ class KYCContent extends StatelessWidget {
             step == KYCStep.document
                 ? 'assets/images/fancy-arrow.png'
                 : 'assets/images/fancy-arrow-2.png',
-            width: 50,
+            width: 40,
           ),
-        ],
-      ),
-    );
-
-    return SingleChildScrollView(
-      child: Column(
-        children: [
-          Container(
-            margin: EdgeInsets.only(top: 20),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(20),
-              color: AppColor.lightBlue,
-              boxShadow: [
-                BoxShadow(
-                  color: AppColor.lightBlue.withValues(alpha: 0.5),
-                  blurRadius: 10,
-                  offset: Offset(0, 10),
-                  spreadRadius: 10,
-                ),
-              ],
-            ),
-            child: Column(children: [header, content]),
-          ),
-          SizedBox(height: 16),
-          footer ?? Container(),
         ],
       ),
     );
@@ -96,6 +100,6 @@ class KYCContent extends StatelessWidget {
     if (userInfo == null || userInfo!.firstName.isEmpty) {
       return 'Hey there!';
     }
-    return 'Hey ${userInfo!.firstName}!';
+    return 'Hey ${userInfo!.firstName} ${userInfo!.lastName}!';
   }
 }

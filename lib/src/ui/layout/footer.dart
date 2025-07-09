@@ -7,7 +7,8 @@ class KYCFooter extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     Widget footer = Container(
-      padding: const EdgeInsets.all(20),
+      height: 50,
+      // padding: const EdgeInsets.all(20),
       color: Colors.white,
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,

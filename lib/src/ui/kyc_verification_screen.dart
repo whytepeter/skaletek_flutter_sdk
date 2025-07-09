@@ -32,13 +32,10 @@ class KYCVerificationScreen extends StatefulWidget {
 class _KYCVerificationScreenState extends State<KYCVerificationScreen> {
   KYCStep currentStep = KYCStep.document;
   final KYCService _kycService = KYCService();
-  final ScrollController _scrollController = ScrollController();
-  bool _showBlur = false;
 
   @override
   void initState() {
     super.initState();
-    _scrollController.addListener(_onScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initializeService();
     });
@@ -46,18 +43,7 @@ class _KYCVerificationScreenState extends State<KYCVerificationScreen> {
 
   @override
   void dispose() {
-    _scrollController.removeListener(_onScroll);
-    _scrollController.dispose();
     super.dispose();
-  }
-
-  void _onScroll() {
-    final showBlur = _scrollController.offset > 0;
-    if (showBlur != _showBlur) {
-      setState(() {
-        _showBlur = showBlur;
-      });
-    }
   }
 
   Future<void> _initializeService() async {
@@ -86,7 +72,7 @@ class _KYCVerificationScreenState extends State<KYCVerificationScreen> {
                   message,
                   style: TextStyle(fontWeight: FontWeight.w500),
                 ),
-                backgroundColor: AppColor.error,
+                backgroundColor: AppColor.text,
                 duration: Duration(seconds: 4),
               ),
             );
@@ -148,10 +134,7 @@ class _KYCVerificationScreenState extends State<KYCVerificationScreen> {
         onClose: () => Navigator.of(context).maybePop(),
       ),
       body: KYCBody(
-        child: SingleChildScrollView(
-          controller: _scrollController,
-          child: _getCurrentStepWidget(),
-        ),
+        child: SingleChildScrollView(child: _getCurrentStepWidget()),
       ),
       bottomNavigationBar: KYCFooter(),
     );

@@ -21,8 +21,8 @@ class _HomeScreenState extends State<HomeScreen> {
     await SkaletekKYC.instance.startVerification(
       token: "039cfd771d204bafb1ea47da0cc06164", // Replace with actual token
       userInfo: {
-        "first_name": "John",
-        "last_name": "Doe",
+        "first_name": "David",
+        "last_name": "Omale",
         "document_type": "PASSPORT",
         "issuing_country": "USA",
       },
@@ -30,7 +30,7 @@ class _HomeScreenState extends State<HomeScreen> {
         "doc_src": "FILE", // Use camera to capture document
         // "logo_url":
         //     "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b8/YouTube_Logo_2017.svg/2560px-YouTube_Logo_2017.svg.png",
-        "partner_name": "Your Company",
+        "partner_name": "YouTube",
         // "primary_color": "#126DD6",
         // "primary_color": "#ff0000",
       },
@@ -131,6 +131,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: const Text('View Documentation'),
               ),
             ),
+
             const SizedBox(height: 20),
             if (_status.isNotEmpty)
               Container(
