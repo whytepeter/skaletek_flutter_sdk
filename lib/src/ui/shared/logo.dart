@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
-const String kDefaultLogoUrl =
-    'https://kyc.dev.skaletek.io/assets/skaletek_mobile-BsaITLA5.svg';
+const String kLocalLogoPath = 'assets/images/skaletek.png';
 
 class KYCLogo extends StatelessWidget {
   final String? logoUrl;
@@ -20,71 +19,74 @@ class KYCLogo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final String url = (logoUrl == null || logoUrl!.isEmpty)
-        ? kDefaultLogoUrl
-        : logoUrl!;
-    if (url.toLowerCase().endsWith('.svg')) {
+    // If no custom logo URL provided, use local asset
+    if (logoUrl == null || logoUrl!.isEmpty) {
+      return _buildLocalLogo();
+    }
+
+    // Try to load custom logo from URL
+    if (logoUrl!.toLowerCase().endsWith('.svg')) {
       return SizedBox(
         width: width,
         height: height,
         child: Align(
           alignment: Alignment.centerLeft,
           child: SvgPicture.network(
-            url,
+            logoUrl!,
             fit: BoxFit.contain,
-            placeholderBuilder: (context) => _buildLoadingLogo(),
+            placeholderBuilder: (context) => _buildLocalLogo(),
             width: width,
             height: height,
-            errorBuilder: (context, error, stackTrace) => _buildSkaletekLogo(),
+            errorBuilder: (context, error, stackTrace) => _buildLocalLogo(),
           ),
         ),
       );
     }
+
+    return Container(
+      width: width,
+      height: height,
+
+      alignment: Alignment.centerLeft,
+      child: Image.network(
+        logoUrl!,
+        fit: BoxFit.contain,
+        errorBuilder: (context, error, stackTrace) => _buildLocalLogo(),
+        loadingBuilder: (context, child, loadingProgress) {
+          if (loadingProgress == null) return child;
+          return _buildLocalLogo();
+        },
+      ),
+    );
+  }
+
+  Widget _buildLocalLogo() {
     return Container(
       width: width,
       height: height,
       alignment: Alignment.centerLeft,
-      child: Image.network(
-        url,
+      child: Image.asset(
+        kLocalLogoPath,
         fit: BoxFit.contain,
-        errorBuilder: (context, error, stackTrace) {
-          return _buildSkaletekLogo();
-        },
-        loadingBuilder: (context, child, loadingProgress) {
-          if (loadingProgress == null) return child;
-          return _buildLoadingLogo();
-        },
+        errorBuilder: (context, error, stackTrace) => _buildTextFallback(),
       ),
     );
   }
 
-  Widget _buildSkaletekLogo() {
+  Widget _buildTextFallback() {
+    final displayText = fallbackText ?? 'Skaletek';
     return SizedBox(
       width: width,
       height: height,
-      child: SvgPicture.network(
-        kDefaultLogoUrl,
-        fit: BoxFit.contain,
-        placeholderBuilder: (context) => _buildLoadingLogo(),
-        width: width,
-        height: height,
-      ),
-    );
-  }
-
-  Widget _buildLoadingLogo() {
-    return Container(
-      width: width,
-      height: height,
-      decoration: BoxDecoration(borderRadius: BorderRadius.circular(4)),
-      child: const Center(
-        child: SizedBox(
-          width: 20,
-          height: 20,
-          child: CircularProgressIndicator(
-            strokeWidth: 2,
-            valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF126DD6)),
+      child: Center(
+        child: Text(
+          displayText,
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF126DD6),
           ),
+          textAlign: TextAlign.center,
         ),
       ),
     );

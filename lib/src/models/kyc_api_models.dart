@@ -1,6 +1,8 @@
 // BBox type for document detection coordinates
 typedef BBox = List<double>;
 
+enum KYCStep { document, liveness }
+
 class Fields {
   final String key;
   final String awsAccessKeyId;

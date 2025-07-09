@@ -58,21 +58,20 @@ class KYCService {
     if (_stateProvider == null || _config == null) return null;
 
     return await _safeApiCall(() async {
-          // Set loading state
-          await _stateProvider!.setLoadingPresignedUrl(true);
+      // Set loading state
+      await _stateProvider!.setLoadingPresignedUrl(true);
 
-          log('Fetching presigned URLs...');
+      log('Fetching presigned URLs...');
 
-          // Fetch presigned URLs
-          final presignedUrl = await getPresignedUrls(_config!.token);
+      // Fetch presigned URLs
+      final presignedUrl = await getPresignedUrls(_config!.token);
 
-          log('Presigned URL response: ${presignedUrl.toMap()}');
+      log('Presigned URL response: ${presignedUrl.toMap()}');
 
-          // Save to global state
-          await _stateProvider!.setPresignedUrl(presignedUrl);
-          return presignedUrl;
-        }, context: 'fetchPresignedUrls') ??
-        null;
+      // Save to global state
+      await _stateProvider!.setPresignedUrl(presignedUrl);
+      return presignedUrl;
+    }, context: 'fetchPresignedUrls');
   }
 
   /// Create a liveness session
@@ -81,28 +80,27 @@ class KYCService {
     if (_config?.token.isEmpty ?? true) return null;
 
     return await _safeApiCall(() async {
-          log('Creating liveness session...');
-          final uri = Uri.parse('$_baseUrl/liveness');
-          final response = await http.post(
-            uri,
-            headers: {
-              'Authorization': 'Bearer ${_config!.token}',
-              'Content-Type': 'application/json',
-            },
-          );
+      log('Creating liveness session...');
+      final uri = Uri.parse('$_baseUrl/liveness');
+      final response = await http.post(
+        uri,
+        headers: {
+          'Authorization': 'Bearer ${_config!.token}',
+          'Content-Type': 'application/json',
+        },
+      );
 
-          log('Liveness session response: ${response.body}');
+      log('Liveness session response: ${response.body}');
 
-          final data = json.decode(response.body);
-          final livenessToken = data['liveness_token'];
+      final data = json.decode(response.body);
+      final livenessToken = data['liveness_token'];
 
-          if (livenessToken == null || livenessToken.isEmpty) {
-            throw SessionError('Could not get liveness token');
-          }
+      if (livenessToken == null || livenessToken.isEmpty) {
+        throw SessionError('Could not get liveness token');
+      }
 
-          return livenessToken;
-        }, context: 'createSession') ??
-        null;
+      return livenessToken;
+    }, context: 'createSession');
   }
 
   /// Get the current session token
@@ -250,7 +248,7 @@ class KYCService {
       final bbox = data['bbox'];
 
       if (!success) {
-        print('Warning: Unable to detect ID');
+        log('Warning: Unable to detect ID');
       }
 
       return bbox;

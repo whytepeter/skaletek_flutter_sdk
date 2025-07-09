@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:skaletek_kyc_flutter/skaletek_kyc_flutter.dart';
+import 'package:skaletek_kyc_flutter/src/models/kyc_api_models.dart';
 import 'package:skaletek_kyc_flutter/src/ui/core/kyc_document_upload.dart';
 import 'package:skaletek_kyc_flutter/src/ui/core/kyc_face_verification.dart';
 import 'package:skaletek_kyc_flutter/src/ui/layout/body.dart';
@@ -9,8 +10,6 @@ import 'layout/footer.dart';
 import 'package:skaletek_kyc_flutter/src/ui/shared/app_color.dart';
 import 'package:skaletek_kyc_flutter/src/services/kyc_state_provider.dart';
 import 'package:skaletek_kyc_flutter/src/services/kyc_service.dart';
-
-enum KYCStep { document, liveness }
 
 class KYCVerificationScreen extends StatefulWidget {
   final KYCConfig config;
@@ -33,13 +32,32 @@ class KYCVerificationScreen extends StatefulWidget {
 class _KYCVerificationScreenState extends State<KYCVerificationScreen> {
   KYCStep currentStep = KYCStep.document;
   final KYCService _kycService = KYCService();
+  final ScrollController _scrollController = ScrollController();
+  bool _showBlur = false;
 
   @override
   void initState() {
     super.initState();
+    _scrollController.addListener(_onScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initializeService();
     });
+  }
+
+  @override
+  void dispose() {
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    final showBlur = _scrollController.offset > 0;
+    if (showBlur != _showBlur) {
+      setState(() {
+        _showBlur = showBlur;
+      });
+    }
   }
 
   Future<void> _initializeService() async {
@@ -106,12 +124,14 @@ class _KYCVerificationScreenState extends State<KYCVerificationScreen> {
         return KYCDocumentUpload(
           onNext: _goToNextStep,
           kycService: _kycService,
+          userInfo: widget.config.userInfo,
         );
       case KYCStep.liveness:
         return KYCFaceVerification(
           onBack: _goToPreviousStep,
           onNext: _goToNextStep,
           kycService: _kycService,
+          userInfo: widget.config.userInfo,
         );
     }
   }
@@ -127,7 +147,12 @@ class _KYCVerificationScreenState extends State<KYCVerificationScreen> {
         logoUrl: widget.config.customization.logoUrl,
         onClose: () => Navigator.of(context).maybePop(),
       ),
-      body: KYCBody(child: _getCurrentStepWidget()),
+      body: KYCBody(
+        child: SingleChildScrollView(
+          controller: _scrollController,
+          child: _getCurrentStepWidget(),
+        ),
+      ),
       bottomNavigationBar: KYCFooter(),
     );
   }

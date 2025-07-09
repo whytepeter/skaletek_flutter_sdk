@@ -14,7 +14,7 @@ class StyledText extends StatelessWidget {
       text,
       style: GoogleFonts.poppins(
         textStyle: Theme.of(context).textTheme.bodyMedium,
-        fontSize: 14,
+        fontSize: 12,
         color: AppColor.textLight,
       ).merge(style),
     );
@@ -33,7 +33,7 @@ class StyledTitle extends StatelessWidget {
       text,
       style: GoogleFonts.poppins(
         textStyle: Theme.of(context).textTheme.titleMedium,
-        fontSize: 16,
+        fontSize: 14,
         color: AppColor.text,
       ).merge(style),
     );

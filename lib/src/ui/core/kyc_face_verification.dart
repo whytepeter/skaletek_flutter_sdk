@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:skaletek_kyc_flutter/src/models/kyc_api_models.dart';
+import 'package:skaletek_kyc_flutter/src/models/kyc_user_info.dart';
 import 'package:skaletek_kyc_flutter/src/services/kyc_service.dart';
 import 'package:skaletek_kyc_flutter/src/ui/core/kyc_face_liveness_detector.dart';
 import 'package:skaletek_kyc_flutter/src/ui/layout/content.dart';
@@ -12,11 +14,13 @@ class KYCFaceVerification extends StatefulWidget {
     this.onBack,
     this.onNext,
     required this.kycService,
+    this.userInfo,
   });
 
   final VoidCallback? onBack;
   final VoidCallback? onNext;
   final KYCService kycService;
+  final KYCUserInfo? userInfo;
 
   @override
   State<KYCFaceVerification> createState() => _KYCFaceVerificationState();
@@ -85,6 +89,8 @@ class _KYCFaceVerificationState extends State<KYCFaceVerification> {
       child: Column(
         children: [
           KYCContent(
+            step: KYCStep.liveness,
+            userInfo: widget.userInfo,
             footer: _buildFooter(),
             child: SizedBox(
               height: 300,

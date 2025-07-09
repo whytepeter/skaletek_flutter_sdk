@@ -37,9 +37,8 @@ class KYCHeader extends StatelessWidget implements PreferredSizeWidget {
       }
     }
 
-    return AppBar(
+    Widget appBar = AppBar(
       backgroundColor: Colors.white,
-
       automaticallyImplyLeading: false,
       title: Row(
         children: [
@@ -66,5 +65,7 @@ class KYCHeader extends StatelessWidget implements PreferredSizeWidget {
         ),
       ],
     );
+
+    return appBar;
   }
 }
