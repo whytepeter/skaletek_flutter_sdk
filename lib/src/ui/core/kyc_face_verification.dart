@@ -39,10 +39,18 @@ class _KYCFaceVerificationState extends State<KYCFaceVerification> {
     try {
       final res = await widget.kycService.createSession();
       if (res != null) {
+        if (kDebugMode) {
+          print('Session created successfully, starting liveness detector...');
+        }
         setState(() {
           _sessionId = res;
           _showLivenessDetector = true;
         });
+      } else {
+        if (kDebugMode) {
+          print('Session creation returned null');
+        }
+        throw Exception('Failed to create liveness session');
       }
     } catch (e) {
       // Error will be handled by global error handler

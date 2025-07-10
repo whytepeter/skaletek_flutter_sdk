@@ -50,8 +50,17 @@ class KYCService {
   }
 
   Future<void> _requestPermissions() async {
-    await Permission.camera.request();
-    await Permission.photos.request();
+    log('Requesting camera and photo permissions...');
+
+    try {
+      final cameraStatus = await Permission.camera.request();
+      log('Camera permission status: $cameraStatus');
+
+      final photosStatus = await Permission.photos.request();
+      log('Photos permission status: $photosStatus');
+    } catch (e) {
+      log('Error requesting permissions: $e');
+    }
   }
 
   Future<PresignedUrl?> _fetchPresignedUrlInBackground() async {
@@ -82,6 +91,12 @@ class KYCService {
     return await _safeApiCall(() async {
       log('Creating liveness session...');
       final uri = Uri.parse('$_baseUrl/liveness');
+
+      log('Request URL: $uri');
+      log(
+        'Request headers: Authorization: Bearer ${_config!.token.substring(0, 10)}...',
+      );
+
       final response = await http.post(
         uri,
         headers: {
@@ -90,15 +105,27 @@ class KYCService {
         },
       );
 
-      log('Liveness session response: ${response.body}');
+      log('Liveness session response status: ${response.statusCode}');
+      log('Liveness session response body: ${response.body}');
+
+      if (response.statusCode != 200) {
+        log('Error: HTTP ${response.statusCode} - ${response.body}');
+        throw SessionError(
+          'Failed to create liveness session: HTTP ${response.statusCode}',
+        );
+      }
 
       final data = json.decode(response.body);
       final livenessToken = data['liveness_token'];
 
       if (livenessToken == null || livenessToken.isEmpty) {
-        throw SessionError('Could not get liveness token');
+        log('Error: No liveness token in response');
+        throw SessionError('Could not get liveness token from response');
       }
 
+      log(
+        'Successfully created liveness session with token: ${livenessToken.substring(0, 10)}...',
+      );
       return livenessToken;
     }, context: 'createSession');
   }

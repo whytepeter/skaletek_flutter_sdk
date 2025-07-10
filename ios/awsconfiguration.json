@@ -1,4 +1,20 @@
 {
+  "aws_project_region": "us-east-1",
+  "aws_cognito_identity_pool_id": "us-east-1:5a2951df-c4c5-4e9f-b094-026f1d436cc8",
+  "aws_cognito_region": "us-east-1",
+  "aws_user_pools_id": "us-east-1_Gge8eWb2B",
+  "aws_user_pools_web_client_id": "26uv5pedfnu8q5epineihod8fj",
+  "oauth": {},
+  "aws_cognito_username_attributes": ["EMAIL"],
+  "aws_cognito_social_providers": [],
+  "aws_cognito_signup_attributes": ["EMAIL"],
+  "aws_cognito_mfa_configuration": "OFF",
+  "aws_cognito_mfa_types": ["SMS"],
+  "aws_cognito_password_protection_settings": {
+    "passwordPolicyMinLength": 8,
+    "passwordPolicyCharacters": []
+  },
+  "aws_cognito_verification_mechanisms": ["EMAIL"],
   "UserAgent": "aws-amplify/cli",
   "Version": "0.1.0",
   "IdentityManager": {
