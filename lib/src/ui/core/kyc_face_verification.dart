@@ -67,6 +67,10 @@ class _KYCFaceVerificationState extends State<KYCFaceVerification> {
       _showLivenessDetector = false;
     });
 
+    if (kDebugMode) {
+      print('Error: $error');
+    }
+
     // Show error message
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));
   }
