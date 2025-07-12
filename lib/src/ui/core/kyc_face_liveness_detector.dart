@@ -30,18 +30,7 @@ class _KYCFaceLivenessDetectorState extends State<KYCFaceLivenessDetector> {
   @override
   void initState() {
     super.initState();
-    _logDebugInfo();
     _initializeLivenessDetector();
-  }
-
-  void _logDebugInfo() {
-    if (kDebugMode) {
-      print('🔍 KYCFaceLivenessDetector Debug Info:');
-      print('   Session ID: ${widget.sessionId}');
-      print('   Region: ${AppConfig.region}');
-      print('   Session ID length: ${widget.sessionId.length}');
-      print('   Session ID is empty: ${widget.sessionId.isEmpty}');
-    }
   }
 
   Future<void> _initializeLivenessDetector() async {
@@ -70,25 +59,6 @@ class _KYCFaceLivenessDetectorState extends State<KYCFaceLivenessDetector> {
     }
   }
 
-  void _handleError(String error) {
-    if (kDebugMode) {
-      print('❌ Face Liveness Error: $error');
-      print('   Session ID: ${widget.sessionId}');
-      print('   Region: ${AppConfig.region}');
-      print('   Is Initialized: $_isInitialized');
-    }
-
-    // Handle specific sessionNotFound error
-    if (error.toLowerCase().contains('sessionnotfound') ||
-        error.toLowerCase().contains('session not found')) {
-      final enhancedError =
-          'Session not found. Please try again. If the problem persists, contact support. (Session ID: ${widget.sessionId})';
-      widget.onError(enhancedError);
-    } else {
-      widget.onError(error);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     if (_initializationError != null) {
@@ -111,7 +81,7 @@ class _KYCFaceLivenessDetectorState extends State<KYCFaceLivenessDetector> {
           }
           widget.onComplete();
         },
-        onError: _handleError,
+        onError: widget.onError,
       ),
     );
   }
