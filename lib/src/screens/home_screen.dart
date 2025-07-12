@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:skaletek_kyc_flutter/skaletek_kyc_flutter.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -11,6 +13,86 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   bool _isVerifying = false;
   String _status = '';
+  PermissionStatus _cameraPermissionStatus = PermissionStatus.denied;
+  bool _showingPermissionDialog = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkCameraPermission();
+  }
+
+  Future<void> _checkCameraPermission() async {
+    // Check current permission status
+    final status = await Permission.camera.status;
+
+    setState(() {
+      _cameraPermissionStatus = status;
+    });
+
+    // Handle permission for iOS simulator
+    if (kDebugMode && defaultTargetPlatform == TargetPlatform.iOS) {
+      if (status.isDenied || status.isPermanentlyDenied) {
+        await _handleSimulatorCameraPermission();
+      }
+    }
+  }
+
+  Future<void> _handleSimulatorCameraPermission() async {
+    if (_showingPermissionDialog) return;
+
+    setState(() {
+      _showingPermissionDialog = true;
+    });
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('iOS Simulator Camera Setup'),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'The iOS simulator requires special setup for camera functionality:',
+            ),
+            SizedBox(height: 16),
+            Text('1. Open Xcode'),
+            Text('2. Go to Features → Camera → Custom Device...'),
+            Text('3. Select a sample video file'),
+            SizedBox(height: 16),
+            Text('Without this setup, face liveness detection will not work.'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              setState(() => _showingPermissionDialog = false);
+            },
+            child: const Text('OK'),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              setState(() => _showingPermissionDialog = false);
+              await _openSimulatorCameraSettings();
+            },
+            child: const Text('Open Xcode'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openSimulatorCameraSettings() async {
+    // This is a placeholder - in a real app, you might want to:
+    // 1. Open Xcode if installed
+    // 2. Show instructions to open simulator settings
+    if (kDebugMode) {
+      print('⚠️ Please manually configure simulator camera in Xcode');
+    }
+  }
 
   void _startVerification() async {
     setState(() {

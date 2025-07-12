@@ -126,7 +126,7 @@ class _KYCFaceVerificationState extends State<KYCFaceVerification> {
             Icon(Icons.face, size: 64, color: Colors.grey[400]),
             const SizedBox(height: 10),
             Text(
-              'Click to Start liveness check',
+              'Click to Start liveness check ',
               style: TextStyle(fontSize: 14, color: Colors.grey[600]),
             ),
           ],

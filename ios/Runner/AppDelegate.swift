@@ -9,7 +9,7 @@ import AWSCognitoAuthPlugin
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
-    // 1) Configure Amplify
+    // Configure Amplify for native iOS plugins
     do {
       try Amplify.add(plugin: AWSCognitoAuthPlugin())
       try Amplify.configure()
@@ -18,9 +18,7 @@ import AWSCognitoAuthPlugin
       print("⚠️ Could not initialize Amplify: \(error)")
     }
 
-    // 2) Register Flutter plugins as usual
     GeneratedPluginRegistrant.register(with: self)
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 }
-

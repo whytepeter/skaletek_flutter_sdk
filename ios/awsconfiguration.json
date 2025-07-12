@@ -1,9 +1,9 @@
 {
   "aws_project_region": "us-east-1",
-  "aws_cognito_identity_pool_id": "us-east-1:5a2951df-c4c5-4e9f-b094-026f1d436cc8",
+  "aws_cognito_identity_pool_id": "us-east-1:90e859cc-ec3f-49e1-a5c0-1bea6cf57bbe",
   "aws_cognito_region": "us-east-1",
-  "aws_user_pools_id": "us-east-1_Gge8eWb2B",
-  "aws_user_pools_web_client_id": "26uv5pedfnu8q5epineihod8fj",
+  "aws_user_pools_id": "us-east-1_FehFyxxgl",
+  "aws_user_pools_web_client_id": "35kf8tf8elf3t015p5ihkuob43",
   "oauth": {},
   "aws_cognito_username_attributes": ["EMAIL"],
   "aws_cognito_social_providers": [],
@@ -23,15 +23,15 @@
   "CredentialsProvider": {
     "CognitoUser": {
       "Default": {
-        "PoolId": "us-east-1_Gge8eWb2B",
+        "PoolId": "us-east-1_FehFyxxgl",
         "Region": "us-east-1"
       }
     }
   },
   "CognitoUserPool": {
     "Default": {
-      "PoolId": "us-east-1_Gge8eWb2B",
-      "AppClientId": "26uv5pedfnu8q5epineihod8fj",
+      "PoolId": "us-east-1_FehFyxxgl",
+      "AppClientId": "35kf8tf8elf3t015p5ihkuob43",
       "Region": "us-east-1"
     }
   }

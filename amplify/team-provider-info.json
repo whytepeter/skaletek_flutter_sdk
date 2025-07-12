@@ -1,0 +1,15 @@
+{
+  "dev": {
+    "awscloudformation": {
+      "AuthRoleName": "amplify-skaletekkyc-dev-81cef-authRole",
+      "UnauthRoleArn": "arn:aws:iam::893446596272:role/amplify-skaletekkyc-dev-81cef-unauthRole",
+      "AuthRoleArn": "arn:aws:iam::893446596272:role/amplify-skaletekkyc-dev-81cef-authRole",
+      "Region": "us-east-1",
+      "DeploymentBucketName": "amplify-skaletekkyc-dev-81cef-deployment",
+      "UnauthRoleName": "amplify-skaletekkyc-dev-81cef-unauthRole",
+      "StackName": "amplify-skaletekkyc-dev-81cef",
+      "StackId": "arn:aws:cloudformation:us-east-1:893446596272:stack/amplify-skaletekkyc-dev-81cef/ce1abb70-5e6d-11f0-b1e8-12d75d49c869",
+      "AmplifyAppId": "d1r7847lcb8u12"
+    }
+  }
+}
