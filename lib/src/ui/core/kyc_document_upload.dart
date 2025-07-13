@@ -173,6 +173,94 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
     }
   }
 
+  bool _hasBackView(String documentType) {
+    switch (documentType.toUpperCase()) {
+      case 'NATIONAL_ID':
+      case 'RESIDENCE_PERMIT':
+      case 'DRIVER_LICENCE':
+        return true;
+      case 'PASSPORT':
+      case 'HEALTH_CARD':
+        return false;
+      default:
+        // Default to false for unknown document types
+        return false;
+    }
+  }
+
+  Widget _buildDocumentView({
+    required String title,
+    required ImageFile? selectedFile,
+    required Function(ImageFile file) onFileSelected,
+    required VoidCallback onFileRemoved,
+    required bool disabled,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        StyledTitle(
+          title,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 12),
+        FileInput(
+          selectedFile: selectedFile,
+          onFileSelected: onFileSelected,
+          onFileRemoved: onFileRemoved,
+          disabled: disabled,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFrontView() {
+    return _buildDocumentView(
+      title: 'Front view',
+      selectedFile: _frontDocument,
+      onFileSelected: (file) {
+        setState(() {
+          _frontDocument = file;
+        });
+        widget.kycService.stateProvider?.setFrontDocumentPath(file.path);
+        // Reset upload state when a new file is selected
+        widget.kycService.stateProvider?.setFrontDocumentUploaded(false);
+      },
+      onFileRemoved: () {
+        setState(() {
+          _frontDocument = null;
+        });
+        widget.kycService.stateProvider?.setFrontDocumentPath(null);
+        // Reset upload state when file is removed
+        widget.kycService.stateProvider?.setFrontDocumentUploaded(false);
+      },
+      disabled: _isUploading,
+    );
+  }
+
+  Widget _buildBackView() {
+    return _buildDocumentView(
+      title: 'Back view',
+      selectedFile: _backDocument,
+      onFileSelected: (file) {
+        setState(() {
+          _backDocument = file;
+        });
+        widget.kycService.stateProvider?.setBackDocumentPath(file.path);
+        // Reset upload state when a new file is selected
+        widget.kycService.stateProvider?.setBackDocumentUploaded(false);
+      },
+      onFileRemoved: () {
+        setState(() {
+          _backDocument = null;
+        });
+        widget.kycService.stateProvider?.setBackDocumentPath(null);
+        // Reset upload state when file is removed
+        widget.kycService.stateProvider?.setBackDocumentUploaded(false);
+      },
+      disabled: _isUploading,
+    );
+  }
+
   bool get _canProceed {
     final provider = widget.kycService.stateProvider;
     final frontUploaded = provider?.frontDocumentUploaded ?? false;
@@ -195,7 +283,7 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
         step: KYCStep.document,
         userInfo: widget.userInfo,
         footer: KYCButton(
-          text: _isUploading ? 'Uploading...' : 'Continue',
+          text: 'Continue',
           block: true,
           loading: _isUploading,
           disabled: !_canProceed,
@@ -216,79 +304,13 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
 
               // Front document upload
               if (!_isLoading) ...[
-                StyledTitle(
-                  'Front view',
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+                _buildFrontView(),
 
-                const SizedBox(height: 12),
-                FileInput(
-                  selectedFile: _frontDocument,
-                  onFileSelected: (file) {
-                    setState(() {
-                      _frontDocument = file;
-                    });
-                    widget.kycService.stateProvider?.setFrontDocumentPath(
-                      file.path,
-                    );
-                    // Reset upload state when a new file is selected
-                    widget.kycService.stateProvider?.setFrontDocumentUploaded(
-                      false,
-                    );
-                  },
-                  onFileRemoved: () {
-                    setState(() {
-                      _frontDocument = null;
-                    });
-                    widget.kycService.stateProvider?.setFrontDocumentPath(null);
-                    // Reset upload state when file is removed
-                    widget.kycService.stateProvider?.setFrontDocumentUploaded(
-                      false,
-                    );
-                  },
-                  disabled: _isUploading,
-                ),
-                const SizedBox(height: 24),
-
-                // Back document upload (optional)
-                StyledTitle(
-                  'Back view ',
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-
-                const SizedBox(height: 12),
-                FileInput(
-                  selectedFile: _backDocument,
-                  onFileSelected: (file) {
-                    setState(() {
-                      _backDocument = file;
-                    });
-                    widget.kycService.stateProvider?.setBackDocumentPath(
-                      file.path,
-                    );
-                    // Reset upload state when a new file is selected
-                    widget.kycService.stateProvider?.setBackDocumentUploaded(
-                      false,
-                    );
-                  },
-                  onFileRemoved: () {
-                    setState(() {
-                      _backDocument = null;
-                    });
-                    widget.kycService.stateProvider?.setBackDocumentPath(null);
-                    // Reset upload state when file is removed
-                    widget.kycService.stateProvider?.setBackDocumentUploaded(
-                      false,
-                    );
-                  },
-                  disabled: _isUploading,
-                ),
+                // Back document upload (only for document types that have back view)
+                if (_hasBackView(widget.userInfo?.documentType ?? '')) ...[
+                  const SizedBox(height: 24),
+                  _buildBackView(),
+                ],
               ],
             ],
           ),
