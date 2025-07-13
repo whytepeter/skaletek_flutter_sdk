@@ -54,7 +54,7 @@ class KYCService {
 
     // Fetch presigned URLs in background
     if (_stateProvider != null) {
-      _fetchPresignedUrlInBackground();
+      getPresignedUrls();
     }
   }
 
@@ -70,26 +70,6 @@ class KYCService {
     } catch (e) {
       safePrint('Error requesting permissions: $e');
     }
-  }
-
-  Future<PresignedUrl?> _fetchPresignedUrlInBackground() async {
-    if (_stateProvider == null || _config == null) return null;
-
-    return await _safeApiCall(() async {
-      // Set loading state
-      await _stateProvider!.setLoadingPresignedUrl(true);
-
-      safePrint('Fetching presigned URLs...');
-
-      // Fetch presigned URLs
-      final presignedUrl = await getPresignedUrls(_config!.token);
-
-      safePrint('Presigned URL response: ${presignedUrl.toMap()}');
-
-      // Save to global state
-      await _stateProvider!.setPresignedUrl(presignedUrl);
-      return presignedUrl;
-    }, context: 'fetchPresignedUrls');
   }
 
   /// Create a liveness session
@@ -229,14 +209,18 @@ class KYCService {
   }
 
   /// Get presigned URLs for document upload
-  Future<PresignedUrl> getPresignedUrls(String sessionToken) async {
+  Future<PresignedUrl> getPresignedUrls() async {
+    if (_stateProvider == null || _config == null) {
+      throw SessionError('Service not initialized');
+    }
+
     try {
       safePrint('Getting presigned URLs...');
       final uri = Uri.parse('$_baseUrl/presign');
       final response = await http.post(
         uri,
         headers: {
-          'Authorization': 'Bearer $sessionToken',
+          'Authorization': 'Bearer ${_config!.token}',
           'Content-Type': 'application/json',
         },
       );
@@ -249,7 +233,10 @@ class KYCService {
         throw SessionError('Could not get presigned URLs');
       }
 
-      return PresignedUrl.fromMap(data);
+      PresignedUrl presignedUrl = PresignedUrl.fromMap(data);
+
+      await _stateProvider!.setPresignedUrl(presignedUrl);
+      return presignedUrl;
     } catch (e) {
       if (e is SessionError) rethrow;
 
@@ -322,35 +309,33 @@ class KYCService {
     File file,
     SignedUrl signedUrl,
   ) async {
-    await _safeApiCall(() async {
-      safePrint('Uploading document to: ${signedUrl.url}');
-      final request = http.MultipartRequest('POST', Uri.parse(signedUrl.url));
+    safePrint('Uploading document to: ${signedUrl.url}');
+    final request = http.MultipartRequest('POST', Uri.parse(signedUrl.url));
 
-      // Add fields
-      final fieldsMap = signedUrl.fields.toMap();
-      request.fields.addAll(Map<String, String>.from(fieldsMap));
+    // Add fields
+    final fieldsMap = signedUrl.fields.toMap();
+    request.fields.addAll(Map<String, String>.from(fieldsMap));
 
-      // Add file
-      request.files.add(await http.MultipartFile.fromPath('file', file.path));
+    // Add file
+    request.files.add(await http.MultipartFile.fromPath('file', file.path));
 
-      final response = await request.send();
+    final response = await request.send();
 
-      if (response.statusCode != 200 &&
-          response.statusCode != 201 &&
-          response.statusCode != 204) {
-        final responseBody = await response.stream.bytesToString();
-        safePrint('Upload response status: ${response.statusCode}');
-        safePrint('Upload response body: $responseBody');
+    if (response.statusCode != 200 &&
+        response.statusCode != 201 &&
+        response.statusCode != 204) {
+      final responseBody = await response.stream.bytesToString();
+      safePrint('Upload response status: ${response.statusCode}');
+      safePrint('Upload response body: $responseBody');
 
-        final errorHandler = ErrorHandlerService();
-        final errorInfo = errorHandler.processUploadError(
-          responseBody,
-          response.statusCode,
-        );
-        final message = errorHandler.getUserMessage(errorInfo);
-        throw SessionError(message);
-      }
-    }, context: 'uploadDocument');
+      final errorHandler = ErrorHandlerService();
+      final errorInfo = errorHandler.processUploadError(
+        responseBody,
+        response.statusCode,
+      );
+      final message = errorHandler.getUserMessage(errorInfo);
+      throw SessionError(message);
+    }
   }
 
   Future<KYCResult> verifyFace() async {
@@ -424,10 +409,12 @@ class KYCService {
     }
   }
 
+  // Centralized error handler instance
+  static final ErrorHandlerService _errorHandler = ErrorHandlerService();
+
   /// Global error handler for all API calls
   void _handleError(dynamic error, {String? context}) {
-    final errorHandler = ErrorHandlerService();
-    final errorInfo = errorHandler.processError(error, context: context);
+    final errorInfo = _errorHandler.processError(error, context: context);
 
     // Handle redirect URLs
     if (errorInfo.data?['redirectUrl'] != null) {
@@ -440,8 +427,15 @@ class KYCService {
       _onError?.call();
     } else {
       // Show user-friendly message
-      final userMessage = errorHandler.getUserMessage(errorInfo);
+      final userMessage = _errorHandler.getUserMessage(errorInfo);
       _onShowSnackbar?.call(userMessage);
+    }
+
+    // Re-throw the error so it can be caught by the calling method
+    if (error is SessionError) {
+      throw error;
+    } else {
+      throw SessionError(errorInfo.message);
     }
   }
 
@@ -454,6 +448,7 @@ class KYCService {
       return await apiCall();
     } catch (e) {
       _handleError(e, context: context);
+      // _handleError now throws the error, so we don't reach this point
       return null;
     }
   }

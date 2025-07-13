@@ -47,6 +47,7 @@ class FileInput extends StatefulWidget {
   final KYCService? kycService;
   final Function(String message)? onShowToast;
   final String? documentType;
+  final Function(bool isScanning)? onScanningChanged;
 
   const FileInput({
     super.key,
@@ -59,6 +60,7 @@ class FileInput extends StatefulWidget {
     this.kycService,
     this.onShowToast,
     this.documentType,
+    this.onScanningChanged,
   });
 
   @override
@@ -111,6 +113,7 @@ class _FileInputState extends State<FileInput> {
 
         // Call onFileSelected with the original file first
         widget.onFileSelected?.call(imageFile);
+        widget.onScanningChanged?.call(true);
 
         // Perform document detection
         await _detectAndCropDocument(imageFile);
@@ -120,6 +123,7 @@ class _FileInputState extends State<FileInput> {
         _errorMessage = 'Failed to pick image: ${e.toString()}';
         _isDetecting = false;
       });
+      widget.onScanningChanged?.call(false);
     }
   }
 
@@ -129,6 +133,7 @@ class _FileInputState extends State<FileInput> {
       setState(() {
         _isDetecting = false;
       });
+      widget.onScanningChanged?.call(false);
       return;
     }
 
@@ -136,6 +141,7 @@ class _FileInputState extends State<FileInput> {
       setState(() {
         _isDetecting = false;
       });
+      widget.onScanningChanged?.call(false);
       return;
     }
 
@@ -179,6 +185,7 @@ class _FileInputState extends State<FileInput> {
 
         // Call onFileSelected with the cropped file
         widget.onFileSelected?.call(croppedImageFile);
+        widget.onScanningChanged?.call(false);
       } else {
         // No bounding box found, show toast message
         widget.onShowToast?.call(
@@ -187,6 +194,7 @@ class _FileInputState extends State<FileInput> {
         setState(() {
           _isDetecting = false;
         });
+        widget.onScanningChanged?.call(false);
       }
     } catch (e) {
       // If detection fails, keep the original file and show error
@@ -196,6 +204,7 @@ class _FileInputState extends State<FileInput> {
       setState(() {
         _isDetecting = false;
       });
+      widget.onScanningChanged?.call(false);
     }
   }
 

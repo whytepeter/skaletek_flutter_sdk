@@ -10,6 +10,18 @@ import 'package:skaletek_kyc_flutter/src/ui/shared/button.dart';
 import 'package:skaletek_kyc_flutter/src/ui/shared/file_input.dart';
 import 'package:skaletek_kyc_flutter/src/ui/shared/typography.dart';
 
+/// Document types that require back view for verification
+const Set<String> _documentTypesWithBackView = {
+  'NATIONAL_ID',
+  'RESIDENCE_PERMIT',
+  'DRIVER_LICENCE',
+};
+
+/// A widget that handles document upload functionality for KYC verification.
+///
+/// This widget manages the upload of front and back document views,
+/// handles presigned URL management, and provides a user-friendly interface
+/// for document selection and upload.
 class KYCDocumentUpload extends StatefulWidget {
   const KYCDocumentUpload({
     super.key,
@@ -32,14 +44,66 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
   PresignedUrl? _presignedUrl;
   bool _isLoading = false;
   bool _isUploading = false;
+  bool _isFrontScanning = false;
+  bool _isBackScanning = false;
+
+  // Centralized error handler instance
+  static final ErrorHandlerService _errorHandler = ErrorHandlerService();
 
   @override
   void initState() {
     super.initState();
-    _getPresignedUrls();
-    _restoreDocumentImages();
+    _initializeDocumentUpload();
   }
 
+  /// Initialize the document upload process by fetching presigned URLs
+  /// and restoring any previously selected documents
+  Future<void> _initializeDocumentUpload() async {
+    await Future.wait([_getPresignedUrls(), _restoreDocumentImages()]);
+  }
+
+  /// Centralized error handling method that processes errors and handles
+  /// session refresh when needed
+  Future<bool> _handleError(
+    dynamic error, {
+    String context = 'documentUpload',
+  }) async {
+    final errorInfo = _errorHandler.processError(error, context: context);
+
+    if (_errorHandler.requiresSessionRefresh(errorInfo)) {
+      return await _refreshSession();
+    } else {
+      final userMessage = _errorHandler.getUserMessage(errorInfo);
+      widget.kycService.showSnackbar(userMessage);
+      return false;
+    }
+  }
+
+  /// Refresh the session by clearing presigned URL and fetching new ones
+  Future<bool> _refreshSession() async {
+    safePrint('Session expired, refreshing presigned URL...');
+
+    await widget.kycService.stateProvider?.clearPresignedUrl();
+    setState(() {
+      _presignedUrl = null;
+    });
+
+    try {
+      await _getPresignedUrls();
+      widget.kycService.showSnackbar(
+        'Session refreshed. Please try uploading again.',
+      );
+      return true;
+    } catch (refreshError) {
+      safePrint('Failed to refresh presigned URL: $refreshError');
+      widget.kycService.showSnackbar(
+        'Failed to refresh session. Please try again.',
+      );
+      return false;
+    }
+  }
+
+  /// Fetch presigned URLs for document upload
   Future<void> _getPresignedUrls() async {
     if (_isLoading) return;
 
@@ -56,19 +120,13 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
           _presignedUrl = presignedUrlFromState;
           _isLoading = false;
         });
-        safePrint('Presigned url available');
+        safePrint('Presigned URL available from state');
         return;
       }
 
-      final sessionToken = await widget.kycService.getSessionToken();
-      if (sessionToken == null) {
-        throw Exception('No session token available');
-      }
-      final presignedUrl = await widget.kycService.getPresignedUrls(
-        sessionToken,
-      );
-
-      safePrint('Presigned url available');
+      // Fetch new presigned URL from service
+      final presignedUrl = await widget.kycService.getPresignedUrls();
+      safePrint('Presigned URL fetched successfully');
 
       setState(() {
         _presignedUrl = presignedUrl;
@@ -78,107 +136,68 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
       setState(() {
         _isLoading = false;
       });
+      rethrow;
     }
   }
 
+  /// Restore previously selected document images from state
   Future<void> _restoreDocumentImages() async {
     final provider = widget.kycService.stateProvider;
-    if (provider?.frontDocumentPath != null && _frontDocument == null) {
-      final file = File(provider!.frontDocumentPath!);
-      if (await file.exists()) {
+
+    // Helper function to restore a single document
+    Future<void> restoreDocument({
+      required String? documentPath,
+      required Function(ImageFile file) setDocument,
+    }) async {
+      if (documentPath == null) return;
+
+      final file = File(documentPath);
+      if (!await file.exists()) return;
+
+      try {
         final bytes = await file.readAsBytes();
+        final imageFile = ImageFile(
+          name: file.uri.pathSegments.last,
+          size: bytes.length,
+          bytes: bytes,
+          path: file.path,
+          extension: file.uri.pathSegments.last.split('.').last,
+        );
+
         setState(() {
-          _frontDocument = ImageFile(
-            name: file.uri.pathSegments.last,
-            size: bytes.length,
-            bytes: bytes,
-            path: file.path,
-            extension: file.uri.pathSegments.last.split('.').last,
-          );
+          setDocument(imageFile);
         });
+      } catch (e) {
+        safePrint('Failed to restore document image: $e');
       }
     }
-    if (provider?.backDocumentPath != null && _backDocument == null) {
-      final file = File(provider!.backDocumentPath!);
-      if (await file.exists()) {
-        final bytes = await file.readAsBytes();
-        setState(() {
-          _backDocument = ImageFile(
-            name: file.uri.pathSegments.last,
-            size: bytes.length,
-            bytes: bytes,
-            path: file.path,
-            extension: file.uri.pathSegments.last.split('.').last,
-          );
-        });
-      }
-    }
+
+    await Future.wait([
+      restoreDocument(
+        documentPath: provider?.frontDocumentPath,
+        setDocument: (file) => _frontDocument = file,
+      ),
+      restoreDocument(
+        documentPath: provider?.backDocumentPath,
+        setDocument: (file) => _backDocument = file,
+      ),
+    ]);
   }
 
+  /// Upload documents to the server
   Future<void> _uploadDocuments() async {
-    if (_frontDocument == null) {
-      setState(() {});
-      safePrint('No front document');
-      widget.kycService.showSnackbar('Please select a front document');
-      return;
-    }
-
-    // Check if back document is required but not provided
-    final documentType = widget.userInfo?.documentType ?? '';
-    final requiresBackView = _hasBackView(documentType);
-
-    if (requiresBackView && _backDocument == null) {
-      setState(() {});
-      safePrint('Back document required but not provided');
-      widget.kycService.showSnackbar('Please select a back document');
-      return;
-    }
+    if (!_validateDocuments()) return;
 
     setState(() {
       _isUploading = true;
     });
 
     try {
-      if (_presignedUrl == null) {
-        setState(() {});
-        safePrint('No presigned url, fetching...');
-        await _getPresignedUrls();
-      }
-
-      final provider = widget.kycService.stateProvider;
-      final uploadTasks = <Future<void>>[];
-
-      // Only upload front document if not already uploaded
-      if (!(provider?.frontDocumentUploaded ?? false)) {
-        final frontFile = File(_frontDocument!.path);
-        uploadTasks.add(
-          widget.kycService.uploadFrontDocument(frontFile, _presignedUrl!),
-        );
-      } else {
-        safePrint('Front document already uploaded, skipping...');
-      }
-
-      // Only upload back document if not already uploaded
-      if (_backDocument != null && !(provider?.backDocumentUploaded ?? false)) {
-        final backFile = File(_backDocument!.path);
-        uploadTasks.add(
-          widget.kycService.uploadBackDocument(backFile, _presignedUrl!),
-        );
-      } else if (_backDocument != null) {
-        safePrint('Back document already uploaded, skipping...');
-      }
-
-      // Only wait for uploads if there are any tasks
-      if (uploadTasks.isNotEmpty) {
-        await Future.wait(uploadTasks);
-      }
-
-      // Mark documents as uploaded
-      await provider?.markDocumentsAsUploaded();
+      await _ensurePresignedUrl();
+      await _performDocumentUploads();
+      await _markDocumentsAsUploaded();
 
       safePrint('Documents uploaded successfully');
-
-      // Call onNext callback
       widget.onNext?.call();
     } catch (e) {
       setState(() {
@@ -186,44 +205,104 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
       });
       safePrint('Upload failed: ${e.toString()}');
 
-      // Use ErrorHandlerService for consistent error handling
-      final errorHandler = ErrorHandlerService();
-      final errorInfo = errorHandler.processError(e, context: 'documentUpload');
+      final sessionRefreshed = await _handleError(
+        e,
+        context: 'uploadDocuments',
+      );
 
-      // Check if error requires session refresh
-      if (errorHandler.requiresSessionRefresh(errorInfo)) {
-        await widget.kycService.stateProvider?.clearPresignedUrl();
-        widget.kycService.showSnackbar(
-          'Session expired. Please try uploading again.',
-        );
-      } else {
-        final userMessage = errorHandler.getUserMessage(errorInfo);
-        widget.kycService.showSnackbar(userMessage);
+      if (sessionRefreshed) {
+        return;
       }
     }
   }
 
-  bool _hasBackView(String documentType) {
-    switch (documentType.toUpperCase()) {
-      case 'NATIONAL_ID':
-      case 'RESIDENCE_PERMIT':
-      case 'DRIVER_LICENCE':
-        return true;
-      case 'PASSPORT':
-      case 'HEALTH_CARD':
-        return false;
-      default:
-        // Default to false for unknown document types
-        return false;
+  /// Validate that required documents are selected
+  bool _validateDocuments() {
+    if (_frontDocument == null) {
+      widget.kycService.showSnackbar('Please select a front document');
+      return false;
+    }
+
+    final documentType = widget.userInfo?.documentType ?? '';
+    final requiresBackView = _hasBackView(documentType);
+
+    if (requiresBackView && _backDocument == null) {
+      widget.kycService.showSnackbar('Please select a back document');
+      return false;
+    }
+
+    return true;
+  }
+
+  /// Ensure presigned URL is available
+  Future<void> _ensurePresignedUrl() async {
+    if (_presignedUrl == null) {
+      safePrint('No presigned URL, fetching...');
+      await _getPresignedUrls();
+    }
+
+    if (_presignedUrl == null) {
+      throw Exception('Failed to get presigned URLs');
     }
   }
 
+  /// Perform the actual document uploads
+  Future<void> _performDocumentUploads() async {
+    final provider = widget.kycService.stateProvider;
+    final uploadTasks = <Future<void>>[];
+
+    // Helper function to add upload task if document needs uploading
+    void addUploadTaskIfNeeded({
+      required ImageFile? document,
+      required bool isUploaded,
+      required Future<void> Function(File file, PresignedUrl url)
+      uploadFunction,
+    }) {
+      if (document != null && !isUploaded) {
+        final file = File(document.path);
+        uploadTasks.add(uploadFunction(file, _presignedUrl!));
+      } else if (document != null) {
+        safePrint('Document already uploaded, skipping...');
+      }
+    }
+
+    // Add front document upload task
+    addUploadTaskIfNeeded(
+      document: _frontDocument,
+      isUploaded: provider?.frontDocumentUploaded ?? false,
+      uploadFunction: widget.kycService.uploadFrontDocument,
+    );
+
+    // Add back document upload task
+    addUploadTaskIfNeeded(
+      document: _backDocument,
+      isUploaded: provider?.backDocumentUploaded ?? false,
+      uploadFunction: widget.kycService.uploadBackDocument,
+    );
+
+    if (uploadTasks.isNotEmpty) {
+      await Future.wait(uploadTasks);
+    }
+  }
+
+  /// Mark documents as uploaded in state
+  Future<void> _markDocumentsAsUploaded() async {
+    await widget.kycService.stateProvider?.markDocumentsAsUploaded();
+  }
+
+  /// Check if document type requires back view
+  bool _hasBackView(String documentType) {
+    return _documentTypesWithBackView.contains(documentType.toUpperCase());
+  }
+
+  /// Build document view widgets (front or back) with a single parameterized function
   Widget _buildDocumentView({
     required String title,
     required ImageFile? selectedFile,
     required Function(ImageFile file) onFileSelected,
     required VoidCallback onFileRemoved,
     required bool disabled,
+    required Function(bool isScanning) onScanningChanged,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -241,81 +320,135 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
           kycService: widget.kycService,
           onShowToast: widget.kycService.showSnackbar,
           documentType: widget.userInfo?.documentType,
+          onScanningChanged: onScanningChanged,
         ),
       ],
     );
   }
 
+  /// Build the front document view
   Widget _buildFrontView() {
     return _buildDocumentView(
       title: 'Front view',
       selectedFile: _frontDocument,
-      onFileSelected: (file) {
-        setState(() {
-          _frontDocument = file;
-        });
-        widget.kycService.stateProvider?.setFrontDocumentPath(file.path);
-        // Reset upload state when a new file is selected
-        widget.kycService.stateProvider?.setFrontDocumentUploaded(false);
-      },
-      onFileRemoved: () {
-        setState(() {
-          _frontDocument = null;
-        });
-        widget.kycService.stateProvider?.setFrontDocumentPath(null);
-        // Reset upload state when file is removed
-        widget.kycService.stateProvider?.setFrontDocumentUploaded(false);
-      },
+      onFileSelected: _handleFrontDocumentSelected,
+      onFileRemoved: _handleFrontDocumentRemoved,
       disabled: _isUploading,
+      onScanningChanged: _setFrontScanning,
     );
   }
 
+  /// Build the back document view
   Widget _buildBackView() {
-    final documentType = widget.userInfo?.documentType ?? '';
-    final requiresBackView = _hasBackView(documentType);
-
     return _buildDocumentView(
-      title: requiresBackView ? 'Back view *' : 'Back view',
+      title: 'Back view',
       selectedFile: _backDocument,
-      onFileSelected: (file) {
-        setState(() {
-          _backDocument = file;
-        });
-        widget.kycService.stateProvider?.setBackDocumentPath(file.path);
-        // Reset upload state when a new file is selected
-        widget.kycService.stateProvider?.setBackDocumentUploaded(false);
-      },
-      onFileRemoved: () {
-        setState(() {
-          _backDocument = null;
-        });
-        widget.kycService.stateProvider?.setBackDocumentPath(null);
-        // Reset upload state when file is removed
-        widget.kycService.stateProvider?.setBackDocumentUploaded(false);
-      },
+      onFileSelected: _handleBackDocumentSelected,
+      onFileRemoved: _handleBackDocumentRemoved,
       disabled: _isUploading,
+      onScanningChanged: _setBackScanning,
     );
   }
 
-  bool get _canProceed {
+  /// Handle document selection and removal with a single parameterized function
+  void _handleDocumentAction({
+    required bool isFront,
+    ImageFile? file,
+    bool isRemoval = false,
+  }) {
+    final isFrontDocument = isFront;
+
+    setState(() {
+      if (isFrontDocument) {
+        _frontDocument = isRemoval ? null : file;
+      } else {
+        _backDocument = isRemoval ? null : file;
+      }
+    });
+
     final provider = widget.kycService.stateProvider;
-    final frontUploaded = provider?.frontDocumentUploaded ?? false;
-    final backUploaded = provider?.backDocumentUploaded ?? false;
+    if (isFrontDocument) {
+      provider?.setFrontDocumentPath(isRemoval ? null : file?.path);
+      provider?.setFrontDocumentUploaded(false);
+    } else {
+      provider?.setBackDocumentPath(isRemoval ? null : file?.path);
+      provider?.setBackDocumentUploaded(false);
+    }
+  }
+
+  /// Handle front document selection
+  void _handleFrontDocumentSelected(ImageFile file) {
+    _handleDocumentAction(isFront: true, file: file);
+  }
+
+  /// Handle front document removal
+  void _handleFrontDocumentRemoved() {
+    _handleDocumentAction(isFront: true, isRemoval: true);
+  }
+
+  /// Handle back document selection
+  void _handleBackDocumentSelected(ImageFile file) {
+    _handleDocumentAction(isFront: false, file: file);
+  }
+
+  /// Handle back document removal
+  void _handleBackDocumentRemoved() {
+    _handleDocumentAction(isFront: false, isRemoval: true);
+  }
+
+  /// Set front document scanning state
+  void _setFrontScanning(bool isScanning) {
+    setState(() {
+      _isFrontScanning = isScanning;
+    });
+  }
+
+  /// Set back document scanning state
+  void _setBackScanning(bool isScanning) {
+    setState(() {
+      _isBackScanning = isScanning;
+    });
+  }
+
+  /// Check if user can proceed to next step
+  bool get _canProceed {
+    if (_isLoading || _isUploading || _isFrontScanning || _isBackScanning) {
+      return false;
+    }
+
+    final provider = widget.kycService.stateProvider;
     final documentType = widget.userInfo?.documentType ?? '';
     final requiresBackView = _hasBackView(documentType);
 
-    // Can proceed if front document is selected and either uploaded or ready to upload
-    final frontReady =
-        _frontDocument != null && (frontUploaded || !_isUploading);
+    // Helper function to check if a document is ready
+    bool isDocumentReady(ImageFile? document, bool isUploaded) {
+      return document != null && (isUploaded || !_isUploading);
+    }
 
-    // Back document logic:
-    // - If document type requires back view, back document must be selected and ready
-    // - If document type doesn't require back view, back document is optional
+    // Front document must be selected and ready
+    final frontReady = isDocumentReady(
+      _frontDocument,
+      provider?.frontDocumentUploaded ?? false,
+    );
+
+    // Back document logic based on document type requirements
     final backReady = requiresBackView
-        ? (_backDocument != null && (backUploaded || !_isUploading))
-        : (_backDocument == null || backUploaded || !_isUploading);
+        ? isDocumentReady(
+            _backDocument,
+            provider?.backDocumentUploaded ?? false,
+          )
+        : (_backDocument == null ||
+              provider?.backDocumentUploaded == true ||
+              !_isUploading);
 
-    return frontReady && backReady && !_isLoading && !_isUploading;
+    return frontReady && backReady;
+  }
+
+  /// Handle the continue button press
+  void _handleContinuePressed() {
+    if (_canProceed) {
+      _uploadDocuments();
+    }
   }
 
   @override
@@ -330,7 +463,7 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
           block: true,
           loading: _isUploading,
           disabled: !_canProceed,
-          onPressed: _canProceed ? () async => await _uploadDocuments() : () {},
+          onPressed: _handleContinuePressed,
         ),
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -338,7 +471,6 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _buildFrontView(),
-
               if (_hasBackView(widget.userInfo?.documentType ?? '')) ...[
                 const SizedBox(height: 24),
                 _buildBackView(),
