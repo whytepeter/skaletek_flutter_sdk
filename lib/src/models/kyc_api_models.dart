@@ -8,12 +8,14 @@ class Fields {
   final String awsAccessKeyId;
   final String xAmzSecurityToken;
   final String signature;
+  final String policy;
 
   Fields({
     required this.key,
     required this.awsAccessKeyId,
     required this.xAmzSecurityToken,
     required this.signature,
+    required this.policy,
   });
 
   factory Fields.fromMap(Map<String, dynamic> map) {
@@ -22,6 +24,7 @@ class Fields {
       awsAccessKeyId: map['AWSAccessKeyId'] ?? '',
       xAmzSecurityToken: map['x-amz-security-token'] ?? '',
       signature: map['signature'] ?? '',
+      policy: map['policy'] ?? '',
     );
   }
 
@@ -31,6 +34,7 @@ class Fields {
       'AWSAccessKeyId': awsAccessKeyId,
       'x-amz-security-token': xAmzSecurityToken,
       'signature': signature,
+      'policy': policy,
     };
   }
 }

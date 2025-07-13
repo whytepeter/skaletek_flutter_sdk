@@ -48,6 +48,7 @@ dependencies:
   face_liveness_detector: ^0.2.7
   amplify_flutter: ^2.0.0
   amplify_auth_cognito: ^2.0.0
+  file_picker: ^10.2.0
 
 
 dev_dependencies:

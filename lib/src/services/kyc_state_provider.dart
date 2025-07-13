@@ -8,18 +8,30 @@ class KYCStateProvider extends ChangeNotifier {
   static const String _hasSeenDosAndDontsKey = 'has_seen_dos_and_donts';
   static const String _sessionTokenKey = 'session_token';
   static const String _presignedUrlKey = 'presigned_url';
+  static const String _frontDocumentPathKey = 'front_document_path';
+  static const String _backDocumentPathKey = 'back_document_path';
+  static const String _frontDocumentUploadedKey = 'front_document_uploaded';
+  static const String _backDocumentUploadedKey = 'back_document_uploaded';
 
   bool _hasSeenDocumentDemo = false;
   bool _hasSeenDosAndDonts = false;
   String? _sessionToken;
   PresignedUrl? _presignedUrl;
   bool _isLoadingPresignedUrl = false;
+  String? _frontDocumentPath;
+  String? _backDocumentPath;
+  bool _frontDocumentUploaded = false;
+  bool _backDocumentUploaded = false;
 
   bool get hasSeenDocumentDemo => _hasSeenDocumentDemo;
   bool get hasSeenDosAndDonts => _hasSeenDosAndDonts;
   String? get sessionToken => _sessionToken;
   PresignedUrl? get presignedUrl => _presignedUrl;
   bool get isLoadingPresignedUrl => _isLoadingPresignedUrl;
+  String? get frontDocumentPath => _frontDocumentPath;
+  String? get backDocumentPath => _backDocumentPath;
+  bool get frontDocumentUploaded => _frontDocumentUploaded;
+  bool get backDocumentUploaded => _backDocumentUploaded;
 
   KYCStateProvider() {
     _loadState();
@@ -44,6 +56,12 @@ class KYCStateProvider extends ChangeNotifier {
           }
         }
       }
+
+      _frontDocumentPath = prefs.getString(_frontDocumentPathKey);
+      _backDocumentPath = prefs.getString(_backDocumentPathKey);
+      _frontDocumentUploaded =
+          prefs.getBool(_frontDocumentUploadedKey) ?? false;
+      _backDocumentUploaded = prefs.getBool(_backDocumentUploadedKey) ?? false;
 
       notifyListeners();
     } catch (e) {
@@ -119,12 +137,90 @@ class KYCStateProvider extends ChangeNotifier {
     }
   }
 
+  Future<void> setFrontDocumentPath(String? path) async {
+    _frontDocumentPath = path;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (path == null) {
+        await prefs.remove(_frontDocumentPathKey);
+      } else {
+        await prefs.setString(_frontDocumentPathKey, path);
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('Error saving front document path: $e');
+      }
+    }
+  }
+
+  Future<void> setBackDocumentPath(String? path) async {
+    _backDocumentPath = path;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (path == null) {
+        await prefs.remove(_backDocumentPathKey);
+      } else {
+        await prefs.setString(_backDocumentPathKey, path);
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('Error saving back document path: $e');
+      }
+    }
+  }
+
+  Future<void> setFrontDocumentUploaded(bool uploaded) async {
+    _frontDocumentUploaded = uploaded;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_frontDocumentUploadedKey, uploaded);
+    } catch (e) {
+      if (kDebugMode) {
+        print('Error saving front document uploaded state: $e');
+      }
+    }
+  }
+
+  Future<void> setBackDocumentUploaded(bool uploaded) async {
+    _backDocumentUploaded = uploaded;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_backDocumentUploadedKey, uploaded);
+    } catch (e) {
+      if (kDebugMode) {
+        print('Error saving back document uploaded state: $e');
+      }
+    }
+  }
+
+  Future<void> markDocumentsAsUploaded() async {
+    if (_frontDocumentPath != null) {
+      await setFrontDocumentUploaded(true);
+    }
+    if (_backDocumentPath != null) {
+      await setBackDocumentUploaded(true);
+    }
+  }
+
+  Future<void> resetDocumentUploadState() async {
+    await setFrontDocumentUploaded(false);
+    await setBackDocumentUploaded(false);
+  }
+
   Future<void> resetState() async {
     _hasSeenDocumentDemo = false;
     _hasSeenDosAndDonts = false;
     _sessionToken = null;
     _presignedUrl = null;
     _isLoadingPresignedUrl = false;
+    _frontDocumentPath = null;
+    _backDocumentPath = null;
+    _frontDocumentUploaded = false;
+    _backDocumentUploaded = false;
     notifyListeners();
 
     try {
@@ -133,6 +229,10 @@ class KYCStateProvider extends ChangeNotifier {
       await prefs.remove(_hasSeenDosAndDontsKey);
       await prefs.remove(_sessionTokenKey);
       await prefs.remove(_presignedUrlKey);
+      await prefs.remove(_frontDocumentPathKey);
+      await prefs.remove(_backDocumentPathKey);
+      await prefs.remove(_frontDocumentUploadedKey);
+      await prefs.remove(_backDocumentUploadedKey);
     } catch (e) {
       if (kDebugMode) {
         print('Error resetting KYC state: $e');

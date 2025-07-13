@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -17,6 +18,8 @@ class KYCService {
   KYCConfig? _config;
   KYCStateProvider? _stateProvider;
   final ImagePicker _imagePicker = ImagePicker();
+
+  KYCStateProvider? get stateProvider => _stateProvider;
 
   // Global error handler callback
   Function(bool success, Map<String, dynamic> data)? _onComplete;
@@ -50,16 +53,16 @@ class KYCService {
   }
 
   Future<void> _requestPermissions() async {
-    log('Requesting camera and photo permissions...');
+    safePrint('Requesting camera and photo permissions...');
 
     try {
       final cameraStatus = await Permission.camera.request();
-      log('Camera permission status: $cameraStatus');
+      safePrint('Camera permission status: $cameraStatus');
 
       final photosStatus = await Permission.photos.request();
-      log('Photos permission status: $photosStatus');
+      safePrint('Photos permission status: $photosStatus');
     } catch (e) {
-      log('Error requesting permissions: $e');
+      safePrint('Error requesting permissions: $e');
     }
   }
 
@@ -70,12 +73,12 @@ class KYCService {
       // Set loading state
       await _stateProvider!.setLoadingPresignedUrl(true);
 
-      log('Fetching presigned URLs...');
+      safePrint('Fetching presigned URLs...');
 
       // Fetch presigned URLs
       final presignedUrl = await getPresignedUrls(_config!.token);
 
-      log('Presigned URL response: ${presignedUrl.toMap()}');
+      safePrint('Presigned URL response: ${presignedUrl.toMap()}');
 
       // Save to global state
       await _stateProvider!.setPresignedUrl(presignedUrl);
@@ -85,15 +88,15 @@ class KYCService {
 
   /// Create a liveness session
   Future<String?> createSession() async {
-    log('config: $_config');
+    safePrint('config: $_config');
     if (_config?.token.isEmpty ?? true) return null;
 
     return await _safeApiCall(() async {
-      log('Creating liveness session...');
+      safePrint('Creating liveness session...');
       final uri = Uri.parse('$_baseUrl/liveness');
 
-      log('Request URL: $uri');
-      log(
+      safePrint('Request URL: $uri');
+      safePrint(
         'Request headers: Authorization: Bearer ${_config!.token.substring(0, 10)}...',
       );
 
@@ -105,11 +108,11 @@ class KYCService {
         },
       );
 
-      log('Liveness session response status: ${response.statusCode}');
-      log('Liveness session response body: ${response.body}');
+      safePrint('Liveness session response status: ${response.statusCode}');
+      safePrint('Liveness session response body: ${response.body}');
 
       if (response.statusCode != 200) {
-        log('Error: HTTP ${response.statusCode} - ${response.body}');
+        safePrint('Error: HTTP ${response.statusCode} - ${response.body}');
         throw SessionError(
           'Failed to create liveness session: HTTP ${response.statusCode}',
         );
@@ -119,11 +122,11 @@ class KYCService {
       final livenessToken = data['liveness_token'];
 
       if (livenessToken == null || livenessToken.isEmpty) {
-        log('Error: No liveness token in response');
+        safePrint('Error: No liveness token in response');
         throw SessionError('Could not get liveness token from response');
       }
 
-      log(
+      safePrint(
         'Successfully created liveness session with token: ${livenessToken.substring(0, 10)}...',
       );
       return livenessToken;
@@ -144,7 +147,7 @@ class KYCService {
     required String sessionToken,
   }) async {
     try {
-      log('Getting liveness result...');
+      safePrint('Getting liveness result...');
       final uri = Uri.parse('$_baseUrl/liveness/result');
       final response = await http.post(
         uri,
@@ -155,7 +158,7 @@ class KYCService {
         body: json.encode({'liveness_token': livenessToken}),
       );
 
-      log('Liveness result response: ${response.body}');
+      safePrint('Liveness result response: ${response.body}');
 
       final data = json.decode(response.body);
       final success = data['success'] ?? false;
@@ -185,7 +188,7 @@ class KYCService {
   /// Verify identity
   Future<String> verifyIdentity({required String sessionToken}) async {
     try {
-      log('Verifying identity...');
+      safePrint('Verifying identity...');
       final uri = Uri.parse('$_baseUrl/verify/');
       final response = await http.post(
         uri,
@@ -195,7 +198,7 @@ class KYCService {
         },
       );
 
-      log('Verify identity response: ${response.body}');
+      safePrint('Verify identity response: ${response.body}');
 
       final data = json.decode(response.body);
       final redirectUrl = data['redirect_url'];
@@ -222,7 +225,7 @@ class KYCService {
   /// Get presigned URLs for document upload
   Future<PresignedUrl> getPresignedUrls(String sessionToken) async {
     try {
-      log('Getting presigned URLs...');
+      safePrint('Getting presigned URLs...');
       final uri = Uri.parse('$_baseUrl/presign');
       final response = await http.post(
         uri,
@@ -232,7 +235,7 @@ class KYCService {
         },
       );
 
-      log('Presigned URLs response: ${response.body}');
+      safePrint('Presigned URLs response: ${response.body}');
 
       final data = json.decode(response.body);
 
@@ -258,7 +261,7 @@ class KYCService {
   /// Detect document in image
   Future<Map<String, dynamic>?> detectDocument(File file) async {
     try {
-      log('Detecting document...');
+      safePrint('Detecting document...');
       final uri = Uri.parse('$_mlBaseUrl/detection/document');
 
       final request = http.MultipartRequest('POST', uri)
@@ -269,13 +272,13 @@ class KYCService {
       final response = await http.Response.fromStream(streamedResponse);
       final data = json.decode(response.body);
 
-      log('Document detection response: ${response.body}');
+      safePrint('Document detection response: ${response.body}');
 
       final success = data['success'] ?? false;
       final bbox = data['bbox'];
 
       if (!success) {
-        log('Warning: Unable to detect ID');
+        safePrint('Warning: Unable to detect ID');
       }
 
       return bbox;
@@ -293,52 +296,27 @@ class KYCService {
     }
   }
 
-  /// Upload document using presigned URL
-  Future<void> uploadDocument(File file, PresignedUrl presignedUrl) async {
-    // This method is now deprecated, use uploadFrontDocument or uploadBackDocument instead
-    throw SessionError('Use uploadFrontDocument or uploadBackDocument instead');
-  }
-
   /// Upload front document using presigned URL
   Future<void> uploadFrontDocument(File file, PresignedUrl presignedUrl) async {
-    try {
-      log('Uploading front document...');
-      final request = http.MultipartRequest(
-        'POST',
-        Uri.parse(presignedUrl.front.url),
-      );
-
-      // Add fields
-      final fieldsMap = presignedUrl.front.fields.toMap();
-      request.fields.addAll(Map<String, String>.from(fieldsMap));
-
-      // Add file
-      request.files.add(await http.MultipartFile.fromPath('file', file.path));
-
-      final response = await request.send();
-
-      if (response.statusCode != 200 && response.statusCode != 201) {
-        final responseBody = await response.stream.bytesToString();
-        final data = json.decode(responseBody);
-        final message = data['message'] ?? data['error'] ?? 'Upload failed';
-        throw SessionError(message, redirectUrl: data['redirect_url']);
-      }
-    } catch (e) {
-      if (e is SessionError) rethrow;
-      throw SessionError('Upload failed: $e');
-    }
+    await _uploadDocumentWithSignedUrl(file, presignedUrl.front);
   }
 
   /// Upload back document using presigned URL
   Future<void> uploadBackDocument(File file, PresignedUrl presignedUrl) async {
+    await _uploadDocumentWithSignedUrl(file, presignedUrl.back);
+  }
+
+  /// Private method to upload a document using a SignedUrl (front or back)
+  Future<void> _uploadDocumentWithSignedUrl(
+    File file,
+    SignedUrl signedUrl,
+  ) async {
     try {
-      final request = http.MultipartRequest(
-        'POST',
-        Uri.parse(presignedUrl.back.url),
-      );
+      safePrint('Uploading document to: ${signedUrl.url}');
+      final request = http.MultipartRequest('POST', Uri.parse(signedUrl.url));
 
       // Add fields
-      final fieldsMap = presignedUrl.back.fields.toMap();
+      final fieldsMap = signedUrl.fields.toMap();
       request.fields.addAll(Map<String, String>.from(fieldsMap));
 
       // Add file
@@ -346,11 +324,30 @@ class KYCService {
 
       final response = await request.send();
 
-      if (response.statusCode != 200 && response.statusCode != 201) {
+      if (response.statusCode != 200 &&
+          response.statusCode != 201 &&
+          response.statusCode != 204) {
         final responseBody = await response.stream.bytesToString();
-        final data = json.decode(responseBody);
-        final message = data['message'] ?? data['error'] ?? 'Upload failed';
-        throw SessionError(message, redirectUrl: data['redirect_url']);
+        safePrint('Upload response status: ${response.statusCode}');
+        safePrint('Upload response body: $responseBody');
+
+        String message = 'Upload failed';
+        String? redirectUrl;
+
+        try {
+          final data = json.decode(responseBody);
+          message = data['message'] ?? data['error'] ?? 'Upload failed';
+          redirectUrl = data['redirect_url'];
+        } catch (jsonError) {
+          // If response is not JSON (e.g., XML), use the raw response or status code
+          if (responseBody.contains('<?xml')) {
+            message = 'Server error: Invalid response format';
+          } else {
+            message = 'Upload failed: HTTP ${response.statusCode}';
+          }
+        }
+
+        throw SessionError(message, redirectUrl: redirectUrl);
       }
     } catch (e) {
       if (e is SessionError) rethrow;
@@ -517,12 +514,12 @@ class KYCService {
 
   /// Global error handler for all API calls
   void _handleError(dynamic error, {String? context}) {
-    log('Error in $context: $error');
+    safePrint('Error in $context: $error');
 
     if (error is SessionError) {
       // Handle SessionError with redirect URL
       if (error.redirectUrl != null) {
-        log('Redirecting to: ${error.redirectUrl}');
+        safePrint('Redirecting to: ${error.redirectUrl}');
         _onComplete?.call(false, {
           'error': error.message,
           'redirectUrl': error.redirectUrl,
@@ -550,12 +547,6 @@ class KYCService {
     } catch (e) {
       _handleError(e, context: context);
       return null;
-    }
-  }
-
-  void log(String message) {
-    if (kDebugMode) {
-      print(message);
     }
   }
 }
