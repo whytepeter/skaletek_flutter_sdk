@@ -198,8 +198,9 @@ class _KYCFaceVerificationState extends State<KYCFaceVerification> {
         KYCButton(
           text: 'Go Back',
           variant: KYCButtonVariant.outline,
-          onPressed:
-              _isLoading || _isVerifying ? () {} : (widget.onBack ?? () {}),
+          onPressed: _isLoading || _isVerifying
+              ? () {}
+              : (widget.onBack ?? () {}),
         ),
         const SizedBox(width: 16),
         Expanded(
