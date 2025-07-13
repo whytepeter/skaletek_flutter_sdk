@@ -9,6 +9,7 @@ import '../models/kyc_result.dart';
 import '../models/kyc_api_models.dart';
 import '../config/app_config.dart';
 import 'kyc_state_provider.dart';
+import 'error_handler_service.dart';
 import 'package:flutter/foundation.dart';
 
 class KYCService {
@@ -20,6 +21,11 @@ class KYCService {
   final ImagePicker _imagePicker = ImagePicker();
 
   KYCStateProvider? get stateProvider => _stateProvider;
+
+  /// Show a snackbar message
+  void showSnackbar(String message) {
+    _onShowSnackbar?.call(message);
+  }
 
   // Global error handler callback
   Function(bool success, Map<String, dynamic> data)? _onComplete;
@@ -259,7 +265,7 @@ class KYCService {
   }
 
   /// Detect document in image
-  Future<Map<String, dynamic>?> detectDocument(File file) async {
+  Future<List<double>?> detectDocument(File file) async {
     try {
       safePrint('Detecting document...');
       final uri = Uri.parse('$_mlBaseUrl/detection/document');
@@ -279,9 +285,14 @@ class KYCService {
 
       if (!success) {
         safePrint('Warning: Unable to detect ID');
+        return null;
       }
 
-      return bbox;
+      if (bbox != null && bbox is List && bbox.length == 4) {
+        return bbox.map((e) => (e as num).toDouble()).toList();
+      }
+
+      return null;
     } catch (e) {
       try {
         final errorData = json.decode(e.toString());
@@ -311,7 +322,7 @@ class KYCService {
     File file,
     SignedUrl signedUrl,
   ) async {
-    try {
+    await _safeApiCall(() async {
       safePrint('Uploading document to: ${signedUrl.url}');
       final request = http.MultipartRequest('POST', Uri.parse(signedUrl.url));
 
@@ -331,114 +342,15 @@ class KYCService {
         safePrint('Upload response status: ${response.statusCode}');
         safePrint('Upload response body: $responseBody');
 
-        String message = 'Upload failed';
-        String? redirectUrl;
-
-        try {
-          final data = json.decode(responseBody);
-          message = data['message'] ?? data['error'] ?? 'Upload failed';
-          redirectUrl = data['redirect_url'];
-        } catch (jsonError) {
-          // If response is not JSON (e.g., XML), use the raw response or status code
-          if (responseBody.contains('<?xml')) {
-            message = 'Server error: Invalid response format';
-          } else {
-            message = 'Upload failed: HTTP ${response.statusCode}';
-          }
-        }
-
-        throw SessionError(message, redirectUrl: redirectUrl);
-      }
-    } catch (e) {
-      if (e is SessionError) rethrow;
-      throw SessionError('Upload failed: $e');
-    }
-  }
-
-  // Legacy methods for backward compatibility
-  Future<KYCResult> captureDocument() async {
-    try {
-      if (_config?.customization.docSrc == 'LIVE') {
-        return await _captureFromCamera();
-      } else {
-        return await _pickFromGallery();
-      }
-    } catch (e) {
-      return KYCResult.failure(error: 'Failed to capture document: $e');
-    }
-  }
-
-  Future<KYCResult> _captureFromCamera() async {
-    try {
-      final XFile? image = await _imagePicker.pickImage(
-        source: ImageSource.camera,
-        imageQuality: 80,
-      );
-
-      if (image == null) {
-        return KYCResult.failure(error: 'No image captured');
-      }
-
-      return await _uploadDocument(File(image.path));
-    } catch (e) {
-      return KYCResult.failure(error: 'Camera capture failed: $e');
-    }
-  }
-
-  Future<KYCResult> _pickFromGallery() async {
-    try {
-      final XFile? image = await _imagePicker.pickImage(
-        source: ImageSource.gallery,
-        imageQuality: 80,
-      );
-
-      if (image == null) {
-        return KYCResult.failure(error: 'No image selected');
-      }
-
-      return await _uploadDocument(File(image.path));
-    } catch (e) {
-      return KYCResult.failure(error: 'Gallery selection failed: $e');
-    }
-  }
-
-  Future<KYCResult> _uploadDocument(File imageFile) async {
-    try {
-      if (_config == null) {
-        return KYCResult.failure(error: 'Service not initialized');
-      }
-
-      final uri = Uri.parse('$_baseUrl/upload-document');
-      final request = http.MultipartRequest('POST', uri)
-        ..headers['Authorization'] = 'Bearer ${_config!.token}'
-        ..headers['Content-Type'] = 'multipart/form-data'
-        ..fields.addAll({
-          'first_name': _config!.userInfo.firstName,
-          'last_name': _config!.userInfo.lastName,
-          'document_type': _config!.userInfo.documentType,
-          'issuing_country': _config!.userInfo.issuingCountry,
-          ..._config!.customization.toMap(),
-        })
-        ..files.add(
-          await http.MultipartFile.fromPath('document', imageFile.path),
+        final errorHandler = ErrorHandlerService();
+        final errorInfo = errorHandler.processUploadError(
+          responseBody,
+          response.statusCode,
         );
-
-      final response = await request.send();
-      final responseBody = await response.stream.bytesToString();
-      final data = json.decode(responseBody);
-
-      if (response.statusCode == 200) {
-        return KYCResult.success(status: data['status'], data: data);
-      } else {
-        return KYCResult.failure(
-          error: data['error'] ?? 'Upload failed',
-          errorCode: data['error_code'],
-          data: data,
-        );
+        final message = errorHandler.getUserMessage(errorInfo);
+        throw SessionError(message);
       }
-    } catch (e) {
-      return KYCResult.failure(error: 'Upload failed: $e');
-    }
+    }, context: 'uploadDocument');
   }
 
   Future<KYCResult> verifyFace() async {
@@ -514,26 +426,22 @@ class KYCService {
 
   /// Global error handler for all API calls
   void _handleError(dynamic error, {String? context}) {
-    safePrint('Error in $context: $error');
+    final errorHandler = ErrorHandlerService();
+    final errorInfo = errorHandler.processError(error, context: context);
 
-    if (error is SessionError) {
-      // Handle SessionError with redirect URL
-      if (error.redirectUrl != null) {
-        safePrint('Redirecting to: ${error.redirectUrl}');
-        _onComplete?.call(false, {
-          'error': error.message,
-          'redirectUrl': error.redirectUrl,
-          'context': context,
-        });
-        // Call onError to close the app when there's a redirect URL
-        _onError?.call();
-      } else {
-        // Show snackbar for errors without redirect URL
-        _onShowSnackbar?.call(error.message);
-      }
+    // Handle redirect URLs
+    if (errorInfo.data?['redirectUrl'] != null) {
+      safePrint('Redirecting to: ${errorInfo.data!['redirectUrl']}');
+      _onComplete?.call(false, {
+        'error': errorInfo.message,
+        'redirectUrl': errorInfo.data!['redirectUrl'],
+        'context': context,
+      });
+      _onError?.call();
     } else {
-      // Show snackbar for other errors
-      _onShowSnackbar?.call(error.toString());
+      // Show user-friendly message
+      final userMessage = errorHandler.getUserMessage(errorInfo);
+      _onShowSnackbar?.call(userMessage);
     }
   }
 

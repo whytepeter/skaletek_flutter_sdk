@@ -100,6 +100,20 @@ class KYCStateProvider extends ChangeNotifier {
     }
   }
 
+  Future<void> clearPresignedUrl() async {
+    _presignedUrl = null;
+    notifyListeners();
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_presignedUrlKey);
+    } catch (e) {
+      if (kDebugMode) {
+        print('Error clearing presigned URL: $e');
+      }
+    }
+  }
+
   Future<void> setLoadingPresignedUrl(bool loading) async {
     _isLoadingPresignedUrl = loading;
     notifyListeners();

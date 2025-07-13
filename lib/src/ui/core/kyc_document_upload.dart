@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:skaletek_kyc_flutter/src/models/kyc_api_models.dart';
 import 'package:skaletek_kyc_flutter/src/models/kyc_user_info.dart';
 import 'package:skaletek_kyc_flutter/src/services/kyc_service.dart';
+import 'package:skaletek_kyc_flutter/src/services/error_handler_service.dart';
 import 'package:skaletek_kyc_flutter/src/ui/layout/content.dart';
 import 'package:skaletek_kyc_flutter/src/ui/shared/button.dart';
 import 'package:skaletek_kyc_flutter/src/ui/shared/file_input.dart';
@@ -118,6 +119,18 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
     if (_frontDocument == null) {
       setState(() {});
       safePrint('No front document');
+      widget.kycService.showSnackbar('Please select a front document');
+      return;
+    }
+
+    // Check if back document is required but not provided
+    final documentType = widget.userInfo?.documentType ?? '';
+    final requiresBackView = _hasBackView(documentType);
+
+    if (requiresBackView && _backDocument == null) {
+      setState(() {});
+      safePrint('Back document required but not provided');
+      widget.kycService.showSnackbar('Please select a back document');
       return;
     }
 
@@ -163,6 +176,8 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
       // Mark documents as uploaded
       await provider?.markDocumentsAsUploaded();
 
+      safePrint('Documents uploaded successfully');
+
       // Call onNext callback
       widget.onNext?.call();
     } catch (e) {
@@ -170,6 +185,21 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
         _isUploading = false;
       });
       safePrint('Upload failed: ${e.toString()}');
+
+      // Use ErrorHandlerService for consistent error handling
+      final errorHandler = ErrorHandlerService();
+      final errorInfo = errorHandler.processError(e, context: 'documentUpload');
+
+      // Check if error requires session refresh
+      if (errorHandler.requiresSessionRefresh(errorInfo)) {
+        await widget.kycService.stateProvider?.clearPresignedUrl();
+        widget.kycService.showSnackbar(
+          'Session expired. Please try uploading again.',
+        );
+      } else {
+        final userMessage = errorHandler.getUserMessage(errorInfo);
+        widget.kycService.showSnackbar(userMessage);
+      }
     }
   }
 
@@ -208,6 +238,9 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
           onFileSelected: onFileSelected,
           onFileRemoved: onFileRemoved,
           disabled: disabled,
+          kycService: widget.kycService,
+          onShowToast: widget.kycService.showSnackbar,
+          documentType: widget.userInfo?.documentType,
         ),
       ],
     );
@@ -238,8 +271,11 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
   }
 
   Widget _buildBackView() {
+    final documentType = widget.userInfo?.documentType ?? '';
+    final requiresBackView = _hasBackView(documentType);
+
     return _buildDocumentView(
-      title: 'Back view',
+      title: requiresBackView ? 'Back view *' : 'Back view',
       selectedFile: _backDocument,
       onFileSelected: (file) {
         setState(() {
@@ -265,12 +301,19 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
     final provider = widget.kycService.stateProvider;
     final frontUploaded = provider?.frontDocumentUploaded ?? false;
     final backUploaded = provider?.backDocumentUploaded ?? false;
+    final documentType = widget.userInfo?.documentType ?? '';
+    final requiresBackView = _hasBackView(documentType);
 
     // Can proceed if front document is selected and either uploaded or ready to upload
     final frontReady =
         _frontDocument != null && (frontUploaded || !_isUploading);
-    // Back document is optional, but if selected, it should be uploaded or ready
-    final backReady = _backDocument == null || backUploaded || !_isUploading;
+
+    // Back document logic:
+    // - If document type requires back view, back document must be selected and ready
+    // - If document type doesn't require back view, back document is optional
+    final backReady = requiresBackView
+        ? (_backDocument != null && (backUploaded || !_isUploading))
+        : (_backDocument == null || backUploaded || !_isUploading);
 
     return frontReady && backReady && !_isLoading && !_isUploading;
   }
@@ -294,23 +337,11 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Loading state
-              if (_isLoading) ...[
-                const Center(child: CircularProgressIndicator()),
-                const SizedBox(height: 16),
-                const Center(child: StyledText('Preparing upload...')),
+              _buildFrontView(),
+
+              if (_hasBackView(widget.userInfo?.documentType ?? '')) ...[
                 const SizedBox(height: 24),
-              ],
-
-              // Front document upload
-              if (!_isLoading) ...[
-                _buildFrontView(),
-
-                // Back document upload (only for document types that have back view)
-                if (_hasBackView(widget.userInfo?.documentType ?? '')) ...[
-                  const SizedBox(height: 24),
-                  _buildBackView(),
-                ],
+                _buildBackView(),
               ],
             ],
           ),
