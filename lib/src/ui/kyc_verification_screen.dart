@@ -1,3 +1,4 @@
+import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:skaletek_kyc_flutter/skaletek_kyc_flutter.dart';
@@ -6,10 +7,10 @@ import 'package:skaletek_kyc_flutter/src/ui/core/kyc_document_upload.dart';
 import 'package:skaletek_kyc_flutter/src/ui/core/kyc_face_verification.dart';
 import 'package:skaletek_kyc_flutter/src/ui/layout/body.dart';
 import 'layout/header.dart';
-import 'layout/footer.dart';
 import 'package:skaletek_kyc_flutter/src/ui/shared/app_color.dart';
 import 'package:skaletek_kyc_flutter/src/services/kyc_state_provider.dart';
 import 'package:skaletek_kyc_flutter/src/services/kyc_service.dart';
+import 'package:skaletek_kyc_flutter/src/models/kyc_result.dart';
 
 class KYCVerificationScreen extends StatefulWidget {
   final KYCConfig config;
@@ -58,12 +59,14 @@ class _KYCVerificationScreenState extends State<KYCVerificationScreen> {
       await _kycService.initialize(
         widget.config,
         stateProvider: stateProvider,
-        onComplete: widget.onComplete,
-        onError: () {
+        onComplete: (success, data) {
+          safePrint('onComplete: $success, $data');
+          widget.onComplete?.call(success, data);
           if (mounted) {
             Navigator.of(context).pop();
           }
         },
+
         onShowSnackbar: (String message) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -131,12 +134,13 @@ class _KYCVerificationScreenState extends State<KYCVerificationScreen> {
       extendBodyBehindAppBar: true,
       appBar: KYCHeader(
         logoUrl: widget.config.customization.logoUrl,
-        onClose: () => Navigator.of(context).maybePop(),
+        onClose: () => Navigator.of(
+          context,
+        ).pop(KYCResult.failure(error: 'Verification was cancelled')),
       ),
       body: KYCBody(
         child: SingleChildScrollView(child: _getCurrentStepWidget()),
       ),
-      bottomNavigationBar: KYCFooter(),
     );
   }
 }

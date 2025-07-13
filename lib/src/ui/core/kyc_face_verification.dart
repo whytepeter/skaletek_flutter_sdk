@@ -7,6 +7,8 @@ import 'package:skaletek_kyc_flutter/src/ui/core/kyc_face_liveness_detector.dart
 import 'package:skaletek_kyc_flutter/src/ui/layout/content.dart';
 import 'package:skaletek_kyc_flutter/src/ui/shared/button.dart';
 import 'package:skaletek_kyc_flutter/src/ui/shared/spinner.dart';
+import 'package:skaletek_kyc_flutter/src/ui/shared/kyc_progress.dart';
+import 'package:skaletek_kyc_flutter/src/models/kyc_result.dart';
 
 class KYCFaceVerification extends StatefulWidget {
   const KYCFaceVerification({
@@ -30,6 +32,7 @@ class _KYCFaceVerificationState extends State<KYCFaceVerification> {
   bool _isLoading = false;
   String _sessionId = '';
   bool _showLivenessDetector = false;
+  bool _isVerifying = false;
 
   Future<void> _startLivenessCheck() async {
     setState(() {
@@ -38,6 +41,7 @@ class _KYCFaceVerificationState extends State<KYCFaceVerification> {
 
     try {
       final res = await widget.kycService.createSession();
+
       if (res != null) {
         if (kDebugMode) {
           print('Session created successfully, starting liveness detector...');
@@ -64,21 +68,72 @@ class _KYCFaceVerificationState extends State<KYCFaceVerification> {
     }
   }
 
-  void _onLivenessComplete() {
+  Future<void> _verifyIdentity() async {
+    BuildContext? bottomSheetContext;
+    // Show the progress bottom sheet
+    showModalBottomSheet(
+      context: context,
+      isDismissible: false,
+      enableDrag: false,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        bottomSheetContext = ctx;
+        return KycProgress(onClose: () => Navigator.of(ctx).maybePop());
+      },
+    );
+
+    try {
+      String? result = await widget.kycService.verifyIdentity();
+      if (result is! String) {
+        throw Exception('Failed to verify identity, Please try again');
+      }
+
+      widget.kycService.showSnackbar('Verification done');
+      if (bottomSheetContext != null && bottomSheetContext!.mounted) {
+        Navigator.of(bottomSheetContext!).pop(); // Close only the bottom sheet
+      }
+    } catch (e) {
+      if (bottomSheetContext != null && bottomSheetContext!.mounted) {
+        Navigator.of(
+          bottomSheetContext!,
+        ).pop(); // Close only the bottom sheet on error
+      }
+    }
+  }
+
+  void _onLivenessComplete() async {
     setState(() {
       _showLivenessDetector = false;
+      _isVerifying = true;
     });
+
+    try {
+      GetResultResponse result = await widget.kycService.getResult(_sessionId);
+      if (result.isLive) {
+        await _verifyIdentity();
+        // Call the KYCService's onComplete callback after verification
+        widget.kycService.callOnComplete(true, {'result': result});
+      } else if (result.remainingTries > 0) {
+        _startLivenessCheck();
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.of(context).pop(KYCResult.failure(error: e.toString()));
+      }
+    } finally {
+      setState(() {
+        _isVerifying = false;
+      });
+    }
   }
 
   void _onLivenessError(String error) {
     setState(() {
       _showLivenessDetector = false;
     });
-
     if (kDebugMode) {
       print('Error: $error');
     }
-
     // Show error message
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));
   }
@@ -108,7 +163,9 @@ class _KYCFaceVerificationState extends State<KYCFaceVerification> {
             child: SizedBox(
               height: 300,
               width: double.infinity,
-              child: _isLoading ? _buildLoading() : _buildDefaultContent(),
+              child: _isLoading || _isVerifying
+                  ? _buildLoading()
+                  : _buildDefaultContent(),
             ),
           ),
         ],
@@ -118,7 +175,7 @@ class _KYCFaceVerificationState extends State<KYCFaceVerification> {
 
   Widget _buildDefaultContent() {
     return GestureDetector(
-      onTap: _isLoading ? () {} : () => _startLivenessCheck(),
+      onTap: _isLoading || _isVerifying ? () {} : () => _startLivenessCheck(),
       child: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -141,15 +198,18 @@ class _KYCFaceVerificationState extends State<KYCFaceVerification> {
         KYCButton(
           text: 'Go Back',
           variant: KYCButtonVariant.outline,
-          onPressed: _isLoading ? () {} : (widget.onBack ?? () {}),
+          onPressed:
+              _isLoading || _isVerifying ? () {} : (widget.onBack ?? () {}),
         ),
         const SizedBox(width: 16),
         Expanded(
           child: KYCButton(
             text: _isLoading ? 'Creating session...' : 'Start liveness check',
             block: true,
-            loading: _isLoading,
-            onPressed: _isLoading ? () {} : () => _startLivenessCheck(),
+            loading: _isLoading || _isVerifying,
+            onPressed: _isLoading || _isVerifying
+                ? () {}
+                : () => _startLivenessCheck(),
           ),
         ),
       ],
@@ -158,7 +218,10 @@ class _KYCFaceVerificationState extends State<KYCFaceVerification> {
 
   Widget _buildLoading() {
     return Center(
-      child: KYCSpinner(size: 32, text: 'Creating liveness session...'),
+      child: KYCSpinner(
+        size: 32,
+        text: _isVerifying ? 'Verifying...' : 'Creating liveness session...',
+      ),
     );
   }
 }

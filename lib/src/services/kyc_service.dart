@@ -29,20 +29,22 @@ class KYCService {
 
   // Global error handler callback
   Function(bool success, Map<String, dynamic> data)? _onComplete;
-  VoidCallback? _onError;
   Function(String message)? _onShowSnackbar;
+
+  /// Public method to call the onComplete callback
+  void callOnComplete(bool success, Map<String, dynamic> data) {
+    _onComplete?.call(success, data);
+  }
 
   Future<void> initialize(
     KYCConfig config, {
     KYCStateProvider? stateProvider,
     Function(bool success, Map<String, dynamic> data)? onComplete,
-    VoidCallback? onError,
     Function(String message)? onShowSnackbar,
   }) async {
     _config = config;
     _stateProvider = stateProvider;
     _onComplete = onComplete;
-    _onError = onError;
     _onShowSnackbar = onShowSnackbar;
 
     // Save session token to global state
@@ -128,17 +130,18 @@ class KYCService {
   }
 
   /// Get liveness result
-  Future<GetResultResponse> getResult({
-    required String livenessToken,
-    required String sessionToken,
-  }) async {
-    try {
+  Future<GetResultResponse> getResult(String livenessToken) async {
+    if (_stateProvider == null || _config == null) {
+      throw SessionError('Service not initialized');
+    }
+
+    final result = await _safeApiCall(() async {
       safePrint('Getting liveness result...');
       final uri = Uri.parse('$_baseUrl/liveness/result');
       final response = await http.post(
         uri,
         headers: {
-          'Authorization': 'Bearer $sessionToken',
+          'Authorization': 'Bearer ${_config!.token}',
           'Content-Type': 'application/json',
         },
         body: json.encode({'liveness_token': livenessToken}),
@@ -151,35 +154,36 @@ class KYCService {
       final redirectUrl = data['redirect_url'] ?? '';
       final remainingTries = data['remaining_tries'] ?? 0;
 
+      if (data['type'] == 'validation_error' || data['message'] != null) {
+        throw SessionError(data['message'] ?? 'Validation error');
+      }
+
       return GetResultResponse(
         selfieName: livenessToken,
         isLive: success,
         redirectUrl: redirectUrl,
         remainingTries: remainingTries,
       );
-    } catch (e) {
-      if (e is SessionError) rethrow;
-
-      try {
-        final errorData = json.decode(e.toString());
-        final message =
-            errorData['message'] ?? errorData['error'] ?? 'An error occurred';
-        throw SessionError(message, redirectUrl: errorData['redirect_url']);
-      } catch (_) {
-        throw SessionError('An error occurred');
-      }
+    }, context: 'getResult');
+    if (result == null) {
+      throw SessionError('Failed to get liveness result');
     }
+    return result;
   }
 
   /// Verify identity
-  Future<String> verifyIdentity({required String sessionToken}) async {
-    try {
+  Future<String> verifyIdentity() async {
+    if (_stateProvider == null || _config == null) {
+      throw SessionError('Service not initialized');
+    }
+
+    return await _safeApiCall(() async {
       safePrint('Verifying identity...');
       final uri = Uri.parse('$_baseUrl/verify/');
       final response = await http.post(
         uri,
         headers: {
-          'Authorization': 'Bearer $sessionToken',
+          'Authorization': 'Bearer ${_config!.token}',
           'Content-Type': 'application/json',
         },
       );
@@ -194,18 +198,7 @@ class KYCService {
       }
 
       return redirectUrl;
-    } catch (e) {
-      if (e is SessionError) rethrow;
-
-      try {
-        final errorData = json.decode(e.toString());
-        final message =
-            errorData['message'] ?? errorData['error'] ?? 'An error occurred';
-        throw SessionError(message, redirectUrl: errorData['redirect_url']);
-      } catch (_) {
-        throw SessionError('An error occurred');
-      }
-    }
+    }, context: 'verifyIdentity');
   }
 
   /// Get presigned URLs for document upload
@@ -338,46 +331,6 @@ class KYCService {
     }
   }
 
-  Future<KYCResult> verifyFace() async {
-    try {
-      if (_config == null) {
-        return KYCResult.failure(error: 'Service not initialized');
-      }
-
-      final XFile? image = await _imagePicker.pickImage(
-        source: ImageSource.camera,
-        imageQuality: 80,
-      );
-
-      if (image == null) {
-        return KYCResult.failure(error: 'No face image captured');
-      }
-
-      final uri = Uri.parse('$_baseUrl/verify-face');
-      final request = http.MultipartRequest('POST', uri)
-        ..headers['Authorization'] = 'Bearer ${_config!.token}'
-        ..files.add(
-          await http.MultipartFile.fromPath('face_image', image.path),
-        );
-
-      final response = await request.send();
-      final responseBody = await response.stream.bytesToString();
-      final data = json.decode(responseBody);
-
-      if (response.statusCode == 200) {
-        return KYCResult.success(status: data['status'], data: data);
-      } else {
-        return KYCResult.failure(
-          error: data['error'] ?? 'Face verification failed',
-          errorCode: data['error_code'],
-          data: data,
-        );
-      }
-    } catch (e) {
-      return KYCResult.failure(error: 'Face verification failed: $e');
-    }
-  }
-
   Future<KYCResult> getVerificationStatus(String verificationId) async {
     try {
       if (_config == null) {
@@ -416,20 +369,9 @@ class KYCService {
   void _handleError(dynamic error, {String? context}) {
     final errorInfo = _errorHandler.processError(error, context: context);
 
-    // Handle redirect URLs
-    if (errorInfo.data?['redirectUrl'] != null) {
-      safePrint('Redirecting to: ${errorInfo.data!['redirectUrl']}');
-      _onComplete?.call(false, {
-        'error': errorInfo.message,
-        'redirectUrl': errorInfo.data!['redirectUrl'],
-        'context': context,
-      });
-      _onError?.call();
-    } else {
-      // Show user-friendly message
-      final userMessage = _errorHandler.getUserMessage(errorInfo);
-      _onShowSnackbar?.call(userMessage);
-    }
+    // Show user-friendly message
+    final userMessage = _errorHandler.getUserMessage(errorInfo);
+    _onShowSnackbar?.call(userMessage);
 
     // Re-throw the error so it can be caught by the calling method
     if (error is SessionError) {
@@ -448,7 +390,6 @@ class KYCService {
       return await apiCall();
     } catch (e) {
       _handleError(e, context: context);
-      // _handleError now throws the error, so we don't reach this point
       return null;
     }
   }

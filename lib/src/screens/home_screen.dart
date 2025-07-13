@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:skaletek_kyc_flutter/skaletek_kyc_flutter.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -11,44 +10,43 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   bool _isVerifying = false;
   String _status = '';
+  bool _hasVerificationResult = false;
 
   void _startVerification() async {
     setState(() {
       _isVerifying = true;
       _status = 'Starting verification...';
+      _hasVerificationResult = false;
     });
 
-    await SkaletekKYC.instance.startVerification(
-      token: "039cfd771d204bafb1ea47da0cc06164", // Replace with actual token
-      userInfo: {
-        "first_name": "David",
-        "last_name": "Omale",
-        "document_type": "PASSPORT",
-        "issuing_country": "USA",
-      },
-      customization: {
-        "doc_src": "FILE", // Use camera to capture document
-        // "logo_url":
-        //     "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b8/YouTube_Logo_2017.svg/2560px-YouTube_Logo_2017.svg.png",
-        "partner_name": "YouTube",
-        // "primary_color": "#126DD6",
-        // "primary_color": "#ff0000",
-      },
+    final userInfo = KYCUserInfo(
+      firstName: "David",
+      lastName: "Omale",
+      documentType: "PASSPORT",
+      issuingCountry: "USA",
+    );
+    final customization = KYCCustomization(
+      docSrc: "FILE",
+      logoUrl: null,
+      partnerName: "YouTube",
+      primaryColor: null,
+    );
+
+    SkaletekKYC.instance.startVerification(
+      token: "039cfd771d204bafb1ea47da0cc06164",
+      userInfo: userInfo,
+      customization: customization,
       onComplete: (success, data) {
         setState(() {
           _isVerifying = false;
-        });
-
-        if (success) {
-          setState(() {
+          _hasVerificationResult = true;
+          if (success) {
             _status = 'Verification completed successfully!';
-          });
-        } else {
-          setState(() {
+          } else {
             _status =
                 'Verification failed: ${data['error'] ?? 'Unknown error'}';
-          });
-        }
+          }
+        });
       },
     );
   }
@@ -102,38 +100,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: const Text('Start Identity Verification'),
                 ),
               ),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton(
-                onPressed: () async {
-                  final Uri url = Uri.parse(
-                    'https://docs.skaletek.io/ekyc/flutter-sdk/',
-                  );
-                  if (await canLaunchUrl(url)) {
-                    await launchUrl(url, mode: LaunchMode.externalApplication);
-                  } else {
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Could not open documentation'),
-                        ),
-                      );
-                    }
-                  }
-                },
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                ),
-                child: const Text('View Documentation'),
-              ),
-            ),
 
             const SizedBox(height: 20),
-            if (_status.isNotEmpty)
+            if (_hasVerificationResult && _status.isNotEmpty)
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(16),

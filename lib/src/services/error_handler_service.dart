@@ -111,20 +111,7 @@ class ErrorHandlerService {
 
   /// Get user-friendly message
   String getUserMessage(ErrorInfo errorInfo) {
-    switch (errorInfo.type) {
-      case ErrorType.network:
-        return 'Connection error. Please check your internet and try again.';
-      case ErrorType.session:
-        return 'Session expired. Please try again.';
-      case ErrorType.validation:
-        return errorInfo.message;
-      case ErrorType.upload:
-        return errorInfo.message;
-      case ErrorType.server:
-        return 'Server error. Please try again later.';
-      case ErrorType.unknown:
-        return 'An unexpected error occurred. Please try again.';
-    }
+    return errorInfo.message;
   }
 
   // Private methods for error processing

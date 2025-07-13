@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:skaletek_kyc_flutter/src/ui/layout/footer.dart';
 
 class KYCBody extends StatelessWidget {
   const KYCBody({super.key, this.child});
@@ -18,7 +19,12 @@ class KYCBody extends StatelessWidget {
             fit: BoxFit.cover,
           ),
         ),
-        child: child ?? Container(),
+        child: Column(
+          children: [
+            Expanded(child: child ?? Container()),
+            KYCFooter(),
+          ],
+        ),
       ),
     );
   }
