@@ -2,8 +2,10 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:skaletek_kyc_flutter/src/models/kyc_api_models.dart';
 import 'package:skaletek_kyc_flutter/src/ui/shared/app_color.dart';
+import 'dart:developer' as developer;
 import 'detection_checks_list.dart';
 import 'feedback_box.dart';
+import 'camera_service.dart';
 
 enum FeedbackState { info, error, success }
 
@@ -25,63 +27,193 @@ class KYCCameraCapture extends StatefulWidget {
   State<KYCCameraCapture> createState() => _KYCCameraCaptureState();
 }
 
-class _KYCCameraCaptureState extends State<KYCCameraCapture> {
+class _KYCCameraCaptureState extends State<KYCCameraCapture>
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   CameraController? _controller;
+  CameraService? _cameraService;
+  DetectionFeedback _feedback = DetectionFeedback(
+    message: 'Initializing...',
+    checks: const DetectionChecks(),
+    connecting: true,
+  );
+
+  // Cache layout calculations
+  late Size _screenSize;
+  late double _rectWidth;
+  late double _rectHeight;
+  late double _rectYOffset;
+  late double _rectTop;
+  late Rect _targetRect;
+
+  // Performance optimization
+  bool _isActive = true;
+  DateTime? _lastRebuildTime;
+  static const _minRebuildInterval = Duration(milliseconds: 16); // 60fps limit
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initCamera();
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _cacheLayoutCalculations();
+  }
+
+  void _cacheLayoutCalculations() {
+    _screenSize = MediaQuery.of(context).size;
+    _rectWidth = _screenSize.width * 0.9;
+    _rectHeight = 220.0;
+    _rectYOffset = 100.0;
+    _rectTop = (_screenSize.height - _rectHeight) / 2 - _rectYOffset;
+
+    _targetRect = Rect.fromLTWH(
+      (_screenSize.width - _rectWidth) / 2,
+      _rectTop,
+      _rectWidth,
+      _rectHeight,
+    );
+  }
+
   Future<void> _initCamera() async {
-    final cameras = await availableCameras();
-    if (cameras.isNotEmpty) {
+    try {
+      final cameras = await availableCameras();
+      if (cameras.isEmpty) {
+        developer.log('No cameras available');
+        return;
+      }
+
       _controller = CameraController(
         cameras[0],
         ResolutionPreset.high,
         enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.jpeg, // More efficient than default
       );
+
       await _controller!.initialize();
-      if (mounted) setState(() {});
+
+      if (mounted) {
+        setState(() {});
+        _initCameraService();
+      }
+    } catch (e) {
+      developer.log('Error initializing camera: $e');
+    }
+  }
+
+  void _initCameraService() {
+    if (_controller == null || !mounted) return;
+
+    _cameraService = CameraService(
+      cameraController: _controller!,
+      targetRect: _targetRect,
+      onChecks: (checks) {
+        // Detection checks callback - could be used for additional logic
+      },
+    );
+
+    // Listen to feedback stream with throttling
+    _cameraService!.feedbackStream.listen((feedback) {
+      if (!mounted || !_isActive) return;
+
+      // Throttle UI updates to prevent excessive rebuilds
+      final now = DateTime.now();
+      if (_lastRebuildTime != null &&
+          now.difference(_lastRebuildTime!).inMilliseconds <
+              _minRebuildInterval.inMilliseconds) {
+        return;
+      }
+      _lastRebuildTime = now;
+
+      if (feedback != _feedback) {
+        setState(() {
+          _feedback = feedback;
+        });
+      }
+    });
+
+    // Listen to auto-capture stream
+    _cameraService!.autoCaptureStream.listen((file) {
+      if (mounted && _isActive) {
+        widget.onCapture?.call(file);
+      }
+    });
+
+    // Connect the service
+    _cameraService!.connect();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_controller == null || !_controller!.value.isInitialized) return;
+
+    switch (state) {
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.paused:
+        _isActive = false;
+        _cameraService?.disconnect();
+        break;
+      case AppLifecycleState.resumed:
+        _isActive = true;
+        _cameraService?.connect();
+        break;
+      case AppLifecycleState.detached:
+        _isActive = false;
+        break;
+      case AppLifecycleState.hidden:
+        _isActive = false;
+        break;
     }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _isActive = false;
+    _cameraService?.dispose();
     _controller?.dispose();
     super.dispose();
   }
 
   void _capture() async {
-    if (_controller != null && _controller!.value.isInitialized) {
-      final file = await _controller!.takePicture();
-      widget.onCapture?.call(file);
+    if (_controller != null && _controller!.value.isInitialized && _isActive) {
+      try {
+        final file = await _controller!.takePicture();
+        widget.onCapture?.call(file);
+      } catch (e) {
+        developer.log('Error capturing image: $e');
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size;
-    final rectWidth = size.width * 0.9;
-    final rectHeight = 220.0;
-    final rectYOffset = 100.0;
-    final rectTop = (size.height - rectHeight) / 2 - rectYOffset;
     return SizedBox.expand(
       child: Stack(
         children: [
+          // Camera preview
           if (_controller != null && _controller!.value.isInitialized)
             Positioned.fill(child: CameraPreview(_controller!)),
+
+          // Overlay with cutout
           if (_controller != null && _controller!.value.isInitialized)
             Positioned.fill(
-              child: _buildRectangleOverlay(rectWidth, rectHeight, rectYOffset),
+              child: _RectangleOverlay(
+                rectWidth: _rectWidth,
+                rectHeight: _rectHeight,
+                rectYOffset: _rectYOffset,
+              ),
             ),
+
           // Rectangle border (cutout)
           Positioned(
-            left: (size.width - rectWidth) / 2,
-            top: rectTop,
-            width: rectWidth,
-            height: rectHeight,
+            left: (_screenSize.width - _rectWidth) / 2,
+            top: _rectTop,
+            width: _rectWidth,
+            height: _rectHeight,
             child: Container(
               decoration: BoxDecoration(
                 border: Border.all(color: Colors.white, width: 2),
@@ -89,17 +221,61 @@ class _KYCCameraCaptureState extends State<KYCCameraCapture> {
               ),
             ),
           ),
+
+          // Detection checks list
           DetectionChecksList(
-            detectionChecks: widget.detectionChecks,
-            top: rectTop + rectHeight + 24,
+            detectionChecks: _feedback.checks,
+            top: _rectTop + _rectHeight + 24,
           ),
+
+          // Feedback box
           FeedbackBox(
-            feedbackState: widget.feedbackState,
-            feedbackText: widget.feedbackText,
+            feedbackState: _getFeedbackState(),
+            feedbackText: _feedback.message,
           ),
+
+          // Connecting overlay
+          if (_feedback.connecting) _buildConnectingOverlay(),
+
+          // UI controls
           _buildCloseButton(),
-          _buildCaptureButton(),
+          if (!_feedback.autoCaptured) _buildCaptureButton(),
         ],
+      ),
+    );
+  }
+
+  FeedbackState _getFeedbackState() {
+    if (_feedback.connecting) return FeedbackState.info;
+    if (_feedback.autoCaptured) return FeedbackState.success;
+    if (_feedback.message.contains('error') ||
+        _feedback.message.contains('Error')) {
+      return FeedbackState.error;
+    }
+    return FeedbackState.info;
+  }
+
+  Widget _buildConnectingOverlay() {
+    return Container(
+      color: Colors.black.withValues(alpha: 0.7),
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+            ),
+            SizedBox(height: 16),
+            Text(
+              'Connecting...',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -151,20 +327,9 @@ class _KYCCameraCaptureState extends State<KYCCameraCapture> {
       ),
     );
   }
-
-  Widget _buildRectangleOverlay(
-    double rectWidth,
-    double rectHeight,
-    double rectYOffset,
-  ) {
-    return _RectangleOverlay(
-      rectWidth: rectWidth,
-      rectHeight: rectHeight,
-      rectYOffset: rectYOffset,
-    );
-  }
 }
 
+/// Optimized rectangle overlay painter with caching
 class _RectangleOverlay extends StatelessWidget {
   final double rectWidth;
   final double rectHeight;
@@ -184,15 +349,18 @@ class _RectangleOverlay extends StatelessWidget {
       width: rectWidth,
       height: rectHeight,
     );
-    return CustomPaint(
-      size: size,
-      painter: _RectangleOverlayPainter(rect: rect),
+    return RepaintBoundary(
+      child: CustomPaint(
+        size: size,
+        painter: _RectangleOverlayPainter(rect: rect),
+      ),
     );
   }
 }
 
 class _RectangleOverlayPainter extends CustomPainter {
   final Rect rect;
+
   _RectangleOverlayPainter({required this.rect});
 
   @override
@@ -200,14 +368,27 @@ class _RectangleOverlayPainter extends CustomPainter {
     final paint = Paint()
       ..color = Colors.black.withValues(alpha: 0.5)
       ..style = PaintingStyle.fill;
+
+    // Create overlay with cutout
     final overlay = Path()
       ..addRect(Rect.fromLTWH(0, 0, size.width, size.height));
     final cutout = Path()
       ..addRRect(RRect.fromRectAndRadius(rect, Radius.circular(10)));
     final finalPath = Path.combine(PathOperation.difference, overlay, cutout);
+
     canvas.drawPath(finalPath, paint);
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(_RectangleOverlayPainter oldDelegate) =>
+      oldDelegate.rect != rect;
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is _RectangleOverlayPainter && other.rect == rect;
+  }
+
+  @override
+  int get hashCode => rect.hashCode;
 }
