@@ -1,9 +1,10 @@
-import 'package:flutter/foundation.dart';
+import 'package:amplify_flutter/amplify_flutter.dart';
+import 'package:face_liveness_detector/face_liveness_detector.dart';
 import 'package:flutter/material.dart';
+import 'package:skaletek_kyc_flutter/src/config/app_config.dart';
 import 'package:skaletek_kyc_flutter/src/models/kyc_api_models.dart';
 import 'package:skaletek_kyc_flutter/src/models/kyc_user_info.dart';
 import 'package:skaletek_kyc_flutter/src/services/kyc_service.dart';
-import 'package:skaletek_kyc_flutter/src/ui/core/kyc_face_liveness_detector.dart';
 import 'package:skaletek_kyc_flutter/src/ui/layout/content.dart';
 import 'package:skaletek_kyc_flutter/src/ui/shared/button.dart';
 import 'package:skaletek_kyc_flutter/src/ui/shared/spinner.dart';
@@ -39,28 +40,29 @@ class _KYCFaceVerificationState extends State<KYCFaceVerification> {
       _isLoading = true;
     });
 
+    // return _onLivenessComplete(); //this is for testing purposes
+
     try {
       final res = await widget.kycService.createSession();
 
       if (res != null) {
-        if (kDebugMode) {
-          print('Session created successfully, starting liveness detector...');
-        }
+        safePrint(
+          'Session created successfully, starting liveness detector...',
+        );
+
         setState(() {
           _sessionId = res;
           _showLivenessDetector = true;
         });
       } else {
-        if (kDebugMode) {
-          print('Session creation returned null');
-        }
+        safePrint('Session creation returned null');
+
         throw Exception('Failed to create liveness session');
       }
     } catch (e) {
       // Error will be handled by global error handler
-      if (kDebugMode) {
-        print('Error creating session: $e');
-      }
+
+      safePrint('Error creating session: $e');
     } finally {
       setState(() {
         _isLoading = false;
@@ -88,7 +90,6 @@ class _KYCFaceVerificationState extends State<KYCFaceVerification> {
         throw Exception('Failed to verify identity, Please try again');
       }
 
-      widget.kycService.showSnackbar('Verification done');
       if (bottomSheetContext != null && bottomSheetContext!.mounted) {
         Navigator.of(bottomSheetContext!).pop(); // Close only the bottom sheet
       }
@@ -107,18 +108,37 @@ class _KYCFaceVerificationState extends State<KYCFaceVerification> {
       _isVerifying = true;
     });
 
+    // await _verifyIdentity();
+    // widget.kycService.callOnComplete(
+    //   KYCResult.success(status: KYCStatus.success),
+    // );
+    // return; //this is for testing purposes
+
     try {
       GetResultResponse result = await widget.kycService.getResult(_sessionId);
       if (result.isLive) {
         await _verifyIdentity();
         // Call the KYCService's onComplete callback after verification
-        widget.kycService.callOnComplete(true, {'result': result});
+        widget.kycService.callOnComplete(
+          KYCResult.success(status: KYCStatus.success),
+        );
       } else if (result.remainingTries > 0) {
         _startLivenessCheck();
       }
     } catch (e) {
       if (mounted) {
-        Navigator.of(context).pop(KYCResult.failure(error: e.toString()));
+        // Check if the error has a redirect URL - only close flow if it does
+        String? redirectUrl;
+        if (e is SessionError) {
+          redirectUrl = e.redirectUrl;
+        }
+
+        if (redirectUrl != null && redirectUrl.isNotEmpty) {
+          // Close the flow only if there's a redirect URL
+          widget.kycService.callOnComplete(
+            KYCResult.failure(status: KYCStatus.failure),
+          );
+        }
       }
     } finally {
       setState(() {
@@ -131,11 +151,7 @@ class _KYCFaceVerificationState extends State<KYCFaceVerification> {
     setState(() {
       _showLivenessDetector = false;
     });
-    if (kDebugMode) {
-      print('Error: $error');
-    }
-    // Show error message
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));
+    safePrint('Error: $error');
   }
 
   @override
@@ -143,9 +159,9 @@ class _KYCFaceVerificationState extends State<KYCFaceVerification> {
     if (_showLivenessDetector) {
       return SizedBox(
         height: MediaQuery.of(context).size.height - 120,
-        child: KYCFaceLivenessDetector(
+        child: FaceLivenessDetector(
           sessionId: _sessionId,
-          kycService: widget.kycService,
+          region: AppConfig.region,
           onComplete: _onLivenessComplete,
           onError: _onLivenessError,
         ),
@@ -198,6 +214,7 @@ class _KYCFaceVerificationState extends State<KYCFaceVerification> {
         KYCButton(
           text: 'Go Back',
           variant: KYCButtonVariant.outline,
+          disabled: _isLoading || _isVerifying,
           onPressed: _isLoading || _isVerifying
               ? () {}
               : (widget.onBack ?? () {}),

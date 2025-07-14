@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:http/http.dart' as http;
-import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../models/kyc_config.dart';
 import '../models/kyc_result.dart';
@@ -10,7 +9,6 @@ import '../models/kyc_api_models.dart';
 import '../config/app_config.dart';
 import 'kyc_state_provider.dart';
 import 'error_handler_service.dart';
-import 'package:flutter/foundation.dart';
 
 class KYCService {
   static const String _baseUrl = AppConfig.kycApiUrl;
@@ -18,7 +16,6 @@ class KYCService {
 
   KYCConfig? _config;
   KYCStateProvider? _stateProvider;
-  final ImagePicker _imagePicker = ImagePicker();
 
   KYCStateProvider? get stateProvider => _stateProvider;
 
@@ -28,18 +25,18 @@ class KYCService {
   }
 
   // Global error handler callback
-  Function(bool success, Map<String, dynamic> data)? _onComplete;
+  Function(KYCResult data)? _onComplete;
   Function(String message)? _onShowSnackbar;
 
   /// Public method to call the onComplete callback
-  void callOnComplete(bool success, Map<String, dynamic> data) {
-    _onComplete?.call(success, data);
+  void callOnComplete(KYCResult data) {
+    _onComplete?.call(data);
   }
 
   Future<void> initialize(
     KYCConfig config, {
     KYCStateProvider? stateProvider,
-    Function(bool success, Map<String, dynamic> data)? onComplete,
+    Function(KYCResult data)? onComplete,
     Function(String message)? onShowSnackbar,
   }) async {
     _config = config;
@@ -334,7 +331,7 @@ class KYCService {
   Future<KYCResult> getVerificationStatus(String verificationId) async {
     try {
       if (_config == null) {
-        return KYCResult.failure(error: 'Service not initialized');
+        return KYCResult.failure(status: KYCStatus.failure);
       }
 
       final uri = Uri.parse('$_baseUrl/status/$verificationId');
@@ -347,18 +344,19 @@ class KYCService {
       );
 
       final data = json.decode(response.body);
+      final statusValue = data['status']?.toString().toUpperCase();
 
       if (response.statusCode == 200) {
-        return KYCResult.success(status: data['status'], data: data);
-      } else {
-        return KYCResult.failure(
-          error: data['error'] ?? 'Failed to get status',
-          errorCode: data['error_code'],
-          data: data,
+        KYCStatus status = KYCStatus.values.firstWhere(
+          (s) => s.value == statusValue,
+          orElse: () => KYCStatus.success,
         );
+        return KYCResult.success(status: status);
+      } else {
+        return KYCResult.failure(status: KYCStatus.failure);
       }
     } catch (e) {
-      return KYCResult.failure(error: 'Status check failed: $e');
+      return KYCResult.failure(status: KYCStatus.failure);
     }
   }
 

@@ -1,57 +1,50 @@
+/// KYCStatus enum for KYC flow status values.
+enum KYCStatus {
+  failure('FAILURE'),
+  success('SUCCESS'),
+  inProgress('IN_PROGRESS'),
+  pending('PENDING'),
+  completed('COMPLETED'),
+  reject('REJECT'),
+  cancelled('CANCELLED');
+
+  const KYCStatus(this.value);
+  final String value;
+}
+
+/// KYCResult model for KYC flow results.
 class KYCResult {
   final bool success;
-  final String? status;
-  final String? error;
-  final String? errorCode;
-  final Map<String, dynamic>? data;
+  final KYCStatus? status;
 
-  const KYCResult({
-    required this.success,
-    this.status,
-    this.error,
-    this.errorCode,
-    this.data,
-  });
+  const KYCResult({required this.success, this.status});
 
-  factory KYCResult.success({String? status, Map<String, dynamic>? data}) {
-    return KYCResult(success: true, status: status, data: data);
+  factory KYCResult.success({KYCStatus? status}) {
+    return KYCResult(success: true, status: status ?? KYCStatus.success);
   }
 
-  factory KYCResult.failure({
-    String? error,
-    String? errorCode,
-    Map<String, dynamic>? data,
-  }) {
-    return KYCResult(
-      success: false,
-      error: error,
-      errorCode: errorCode,
-      data: data,
-    );
+  factory KYCResult.failure({KYCStatus? status}) {
+    return KYCResult(success: false, status: status ?? KYCStatus.failure);
   }
 
   Map<String, dynamic> toMap() {
-    return {
-      'success': success,
-      if (status != null) 'status': status,
-      if (error != null) 'error': error,
-      if (errorCode != null) 'error_code': errorCode,
-      if (data != null) 'data': data,
-    };
+    return {'success': success, if (status != null) 'status': status!.value};
   }
 
   factory KYCResult.fromMap(Map<String, dynamic> map) {
-    return KYCResult(
-      success: map['success'] ?? false,
-      status: map['status'],
-      error: map['error'],
-      errorCode: map['error_code'],
-      data: map['data'],
-    );
+    final statusValue = map['status'] as String?;
+    KYCStatus? status;
+    if (statusValue != null) {
+      status = KYCStatus.values.firstWhere(
+        (s) => s.value == statusValue,
+        orElse: () => KYCStatus.failure,
+      );
+    }
+    return KYCResult(success: map['success'] ?? false, status: status);
   }
 
   @override
   String toString() {
-    return 'KYCResult(success: $success, status: $status, error: $error)';
+    return 'KYCResult(success: $success, status: ${status?.value})';
   }
 }

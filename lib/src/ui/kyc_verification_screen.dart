@@ -1,4 +1,3 @@
-import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:skaletek_kyc_flutter/skaletek_kyc_flutter.dart';
@@ -10,20 +9,17 @@ import 'layout/header.dart';
 import 'package:skaletek_kyc_flutter/src/ui/shared/app_color.dart';
 import 'package:skaletek_kyc_flutter/src/services/kyc_state_provider.dart';
 import 'package:skaletek_kyc_flutter/src/services/kyc_service.dart';
-import 'package:skaletek_kyc_flutter/src/models/kyc_result.dart';
 
 class KYCVerificationScreen extends StatefulWidget {
   final KYCConfig config;
   final VoidCallback? onNext;
   final VoidCallback? onBack;
-  final Function(bool success, Map<String, dynamic> data)? onComplete;
 
   const KYCVerificationScreen({
     super.key,
     required this.config,
     this.onNext,
     this.onBack,
-    this.onComplete,
   });
 
   @override
@@ -59,11 +55,9 @@ class _KYCVerificationScreenState extends State<KYCVerificationScreen> {
       await _kycService.initialize(
         widget.config,
         stateProvider: stateProvider,
-        onComplete: (success, data) {
-          safePrint('onComplete: $success, $data');
-          widget.onComplete?.call(success, data);
+        onComplete: (KYCResult result) {
           if (mounted) {
-            Navigator.of(context).pop();
+            Navigator.of(context).pop(result);
           }
         },
 
@@ -136,7 +130,7 @@ class _KYCVerificationScreenState extends State<KYCVerificationScreen> {
         logoUrl: widget.config.customization.logoUrl,
         onClose: () => Navigator.of(
           context,
-        ).pop(KYCResult.failure(error: 'Verification was cancelled')),
+        ).pop(KYCResult.failure(status: KYCStatus.cancelled)),
       ),
       body: KYCBody(
         child: SingleChildScrollView(child: _getCurrentStepWidget()),

@@ -36,15 +36,15 @@ class _HomeScreenState extends State<HomeScreen> {
       token: "039cfd771d204bafb1ea47da0cc06164",
       userInfo: userInfo,
       customization: customization,
-      onComplete: (success, data) {
+      onComplete: (result) {
         setState(() {
           _isVerifying = false;
           _hasVerificationResult = true;
-          if (success) {
+          if (result['success'] == true) {
             _status = 'Verification completed successfully!';
           } else {
             _status =
-                'Verification failed: ${data['error'] ?? 'Unknown error'}';
+                'Verification failed: ${result['status'] ?? 'Unknown error'}';
           }
         });
       },

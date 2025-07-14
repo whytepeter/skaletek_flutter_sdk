@@ -1,7 +1,3 @@
-/// Kyc_Progress bottom sheet widget for showing identity verification progress.
-///
-/// Displays a modal with a close button, title, animated dots, and a message.
-/// Uses app color and typography for consistency.
 import 'package:flutter/material.dart';
 import 'package:skaletek_kyc_flutter/src/ui/shared/app_color.dart';
 import 'package:skaletek_kyc_flutter/src/ui/shared/typography.dart';
@@ -21,26 +17,29 @@ class KycProgress extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     Widget header() {
-      return Stack(
-        alignment: Alignment.center,
-        children: [
-          Align(
-            alignment: Alignment.centerLeft,
-            child: IconButton(
-              style: IconButton.styleFrom(
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                  side: BorderSide(color: AppColor.light),
+      return Padding(
+        padding: EdgeInsets.fromLTRB(10, 10, 10, 0),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: IconButton(
+                style: IconButton.styleFrom(
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    side: BorderSide(color: AppColor.light),
+                  ),
                 ),
+                icon: const Icon(Icons.close),
+                onPressed: onClose ?? () => Navigator.of(context).maybePop(),
               ),
-              icon: const Icon(Icons.close),
-              onPressed: onClose ?? () => Navigator.of(context).maybePop(),
             ),
-          ),
-          Center(
-            child: StyledTitle(title, style: const TextStyle(fontSize: 18)),
-          ),
-        ],
+            Center(
+              child: StyledTitle(title, style: const TextStyle(fontSize: 18)),
+            ),
+          ],
+        ),
       );
     }
 
@@ -50,7 +49,7 @@ class KycProgress extends StatelessWidget {
         color: Colors.white,
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      padding: const EdgeInsets.all(18),
+
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -87,7 +86,7 @@ class KycProgress extends StatelessWidget {
 }
 
 class _AnimatedDots extends StatefulWidget {
-  const _AnimatedDots({super.key});
+  const _AnimatedDots();
 
   @override
   State<_AnimatedDots> createState() => _AnimatedDotsState();
@@ -153,8 +152,8 @@ class _AnimatedDotsState extends State<_AnimatedDots>
                   }
                   return Container(
                     margin: const EdgeInsets.all(3),
-                    width: 12,
-                    height: 12,
+                    width: 14,
+                    height: 14,
                     decoration: BoxDecoration(
                       color: color,
                       shape: BoxShape.circle,

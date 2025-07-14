@@ -22,12 +22,12 @@ class SkaletekKYC {
   /// [token] - Authentication token for the verification session
   /// [userInfo] - User information model
   /// [customization] - UI customization model
-  /// [onComplete] - Callback called with the result
+  /// [onComplete] - Callback called with the result as a Map
   Future<void> startVerification({
     required String token,
     required KYCUserInfo userInfo,
     required KYCCustomization customization,
-    required Function(bool success, Map<String, dynamic> data) onComplete,
+    required Function(Map<String, dynamic> result) onComplete,
   }) async {
     try {
       final config = KYCConfig(
@@ -45,12 +45,12 @@ class SkaletekKYC {
         ),
       );
       if (result != null) {
-        onComplete(result.success, result.toMap());
+        onComplete(result.toMap());
       } else {
-        onComplete(false, {'error': 'Verification was cancelled'});
+        onComplete(KYCResult.failure(status: KYCStatus.failure).toMap());
       }
     } catch (e) {
-      onComplete(false, {'error': e.toString()});
+      onComplete(KYCResult.failure(status: KYCStatus.failure).toMap());
     }
   }
 
