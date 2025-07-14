@@ -109,6 +109,7 @@ class _KYCVerificationScreenState extends State<KYCVerificationScreen> {
           onNext: _goToNextStep,
           kycService: _kycService,
           userInfo: widget.config.userInfo,
+          customization: widget.config.customization,
         );
       case KYCStep.liveness:
         return KYCFaceVerification(

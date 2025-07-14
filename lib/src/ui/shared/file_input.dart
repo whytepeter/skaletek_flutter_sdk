@@ -48,6 +48,8 @@ class FileInput extends StatefulWidget {
   final Function(String message)? onShowToast;
   final String? documentType;
   final Function(bool isScanning)? onScanningChanged;
+  final bool showCameraIcon;
+  final VoidCallback? onCameraPressed;
 
   const FileInput({
     super.key,
@@ -61,6 +63,8 @@ class FileInput extends StatefulWidget {
     this.onShowToast,
     this.documentType,
     this.onScanningChanged,
+    this.showCameraIcon = false,
+    this.onCameraPressed,
   });
 
   @override
@@ -230,7 +234,11 @@ class _FileInputState extends State<FileInput> {
     return Opacity(
       opacity: widget.disabled ? 0.5 : 1.0,
       child: GestureDetector(
-        onTap: widget.disabled ? null : _pickImage,
+        onTap: widget.disabled
+            ? null
+            : (widget.showCameraIcon && widget.onCameraPressed != null)
+            ? widget.onCameraPressed
+            : _pickImage,
         child: Stack(
           children: [
             _buildDashedBorder(borderColor),
@@ -282,6 +290,11 @@ class _FileInputState extends State<FileInput> {
   }
 
   Widget _buildDefaultView() {
+    if (widget.showCameraIcon) {
+      return Center(
+        child: Icon(Icons.camera_alt, size: 40, color: AppColor.primary),
+      );
+    }
     return Center(
       child: Image.asset(
         'assets/images/image.png',

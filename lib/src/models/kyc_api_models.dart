@@ -156,6 +156,74 @@ class DocumentDetectionResult {
   }
 }
 
+enum DetectionCheckResult { pass, fail, none }
+
+class DetectionChecks {
+  final DetectionCheckResult glare;
+  final DetectionCheckResult blur;
+  final DetectionCheckResult contrast;
+  final DetectionCheckResult darkness;
+  final DetectionCheckResult brightness;
+
+  const DetectionChecks({
+    this.glare = DetectionCheckResult.none,
+    this.blur = DetectionCheckResult.none,
+    this.contrast = DetectionCheckResult.none,
+    this.darkness = DetectionCheckResult.none,
+    this.brightness = DetectionCheckResult.none,
+  });
+
+  static const Map<String, String> labels = {
+    'darkness': 'Document is fully visible',
+    'brightness': 'Good lighting detected',
+    'blur': 'No blur detected',
+    'glare': 'No glare or reflections',
+  };
+
+  static const Map<String, String> failLabels = {
+    'darkness': 'Document is not visible',
+    'brightness': 'Poor lighting',
+    'blur': 'Blur detected',
+    'glare': 'Glare/reflections detected',
+  };
+
+  factory DetectionChecks.fromMap(Map<String, dynamic> map) {
+    DetectionCheckResult parse(dynamic v) {
+      if (v == 'PASS') return DetectionCheckResult.pass;
+      if (v == 'FAIL') return DetectionCheckResult.fail;
+      return DetectionCheckResult.none;
+    }
+
+    return DetectionChecks(
+      glare: parse(map['glare']),
+      blur: parse(map['blur']),
+      contrast: parse(map['contrast']),
+      darkness: parse(map['darkness']),
+      brightness: parse(map['brightness']),
+    );
+  }
+
+  Map<String, String?> toMap() => {
+    'glare': _toString(glare),
+    'blur': _toString(blur),
+    'contrast': _toString(contrast),
+    'darkness': _toString(darkness),
+    'brightness': _toString(brightness),
+  };
+
+  static String? _toString(DetectionCheckResult v) {
+    switch (v) {
+      case DetectionCheckResult.pass:
+        return 'PASS';
+      case DetectionCheckResult.fail:
+        return 'FAIL';
+      case DetectionCheckResult.none:
+      default:
+        return null;
+    }
+  }
+}
+
 class SessionError implements Exception {
   final String message;
   final Map<String, dynamic>? data;

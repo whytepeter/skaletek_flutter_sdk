@@ -1,10 +1,11 @@
 import 'dart:io';
 import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:flutter/material.dart';
+import 'package:skaletek_kyc_flutter/skaletek_kyc_flutter.dart';
 import 'package:skaletek_kyc_flutter/src/models/kyc_api_models.dart';
-import 'package:skaletek_kyc_flutter/src/models/kyc_user_info.dart';
 import 'package:skaletek_kyc_flutter/src/services/kyc_service.dart';
 import 'package:skaletek_kyc_flutter/src/services/error_handler_service.dart';
+import 'package:skaletek_kyc_flutter/src/ui/core/camera_captuer/kyc_camera_capture.dart';
 import 'package:skaletek_kyc_flutter/src/ui/layout/content.dart';
 import 'package:skaletek_kyc_flutter/src/ui/shared/button.dart';
 import 'package:skaletek_kyc_flutter/src/ui/shared/file_input.dart';
@@ -28,11 +29,13 @@ class KYCDocumentUpload extends StatefulWidget {
     this.onNext,
     required this.kycService,
     this.userInfo,
+    required this.customization,
   });
 
   final VoidCallback? onNext;
   final KYCService kycService;
   final KYCUserInfo? userInfo;
+  final KYCCustomization customization;
 
   @override
   State<KYCDocumentUpload> createState() => _KYCDocumentUploadState();
@@ -310,6 +313,44 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
     return _documentTypesWithBackView.contains(documentType.toUpperCase());
   }
 
+  void _showFullScreenCameraSheet({required bool isFront}) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.black,
+      enableDrag: false,
+      builder: (context) => SizedBox(
+        height: MediaQuery.of(context).size.height,
+        child: KYCCameraCapture(
+          onCapture: (file) async {
+            final bytes = await file.readAsBytes();
+            final imageFile = ImageFile(
+              name: file.name,
+              size: bytes.length,
+              bytes: bytes,
+              path: file.path,
+              extension: file.name.split('.').last,
+            );
+
+            if (context.mounted) {
+              Navigator.of(context).pop();
+            }
+
+            setState(() {
+              if (isFront) {
+                _frontDocument = imageFile;
+                _handleFrontDocumentSelected(imageFile);
+              } else {
+                _backDocument = imageFile;
+                _handleBackDocumentSelected(imageFile);
+              }
+            });
+          },
+        ),
+      ),
+    );
+  }
+
   /// Build document view widgets (front or back) with a single parameterized function
   Widget _buildDocumentView({
     required String title,
@@ -318,7 +359,36 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
     required VoidCallback onFileRemoved,
     required bool disabled,
     required Function(bool isScanning) onScanningChanged,
+    required bool isFront,
   }) {
+    final docSrc = widget.customization.docSrc.toUpperCase();
+    if (docSrc == 'LIVE') {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          StyledTitle(
+            title,
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 12),
+          FileInput(
+            selectedFile: selectedFile,
+            onFileSelected: onFileSelected,
+            onFileRemoved: onFileRemoved,
+            disabled: disabled,
+            kycService: widget.kycService,
+            onShowToast: widget.kycService.showSnackbar,
+            documentType: widget.userInfo?.documentType,
+            onScanningChanged: onScanningChanged,
+            showCameraIcon: true,
+            onCameraPressed: () {
+              _showFullScreenCameraSheet(isFront: isFront);
+            },
+          ),
+        ],
+      );
+    }
+    // Fallback to file input for non-LIVE
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -350,6 +420,7 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
       onFileRemoved: _handleFrontDocumentRemoved,
       disabled: _isUploading,
       onScanningChanged: _setFrontScanning,
+      isFront: true,
     );
   }
 
@@ -362,6 +433,7 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
       onFileRemoved: _handleBackDocumentRemoved,
       disabled: _isUploading,
       onScanningChanged: _setBackScanning,
+      isFront: false,
     );
   }
 
