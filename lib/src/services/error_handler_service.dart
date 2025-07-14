@@ -64,7 +64,9 @@ class ErrorHandlerService {
     } else if (error.toString().contains('FormatException')) {
       errorInfo = _processFormatError(error);
     } else {
-      errorInfo = _processGenericError(error);
+      // Try to parse as JSON error response
+      final jsonError = _processJsonError(error);
+      errorInfo = jsonError ?? _processGenericError(error);
     }
 
     // Cache the result
@@ -100,7 +102,8 @@ class ErrorHandlerService {
   bool requiresSessionRefresh(ErrorInfo errorInfo) {
     return errorInfo.type == ErrorType.session ||
         errorInfo.message.contains('expired') ||
-        errorInfo.message.contains('AccessDenied');
+        errorInfo.message.contains('AccessDenied') ||
+        errorInfo.message.contains('unauthorized');
   }
 
   bool requiresUserAction(ErrorInfo errorInfo) {
@@ -111,7 +114,23 @@ class ErrorHandlerService {
 
   /// Get user-friendly message
   String getUserMessage(ErrorInfo errorInfo) {
-    return errorInfo.message;
+    switch (errorInfo.type) {
+      case ErrorType.network:
+        return 'Network error. Please check your connection and try again.';
+      case ErrorType.session:
+        return 'Session expired. Please try again.';
+      case ErrorType.upload:
+        return 'Upload failed. Please try again.';
+      case ErrorType.validation:
+        return 'Invalid input. Please check your information and try again.';
+      case ErrorType.server:
+        return 'Server error. Please try again later.';
+      case ErrorType.unknown:
+      default:
+        return errorInfo.message.isNotEmpty
+            ? errorInfo.message
+            : 'An unexpected error occurred. Please try again.';
+    }
   }
 
   // Private methods for error processing
@@ -120,31 +139,22 @@ class ErrorHandlerService {
       message: error.message,
       type: ErrorType.session,
       severity: ErrorSeverity.error,
-      data: {'redirectUrl': error.redirectUrl},
+      data: error.data,
     );
   }
 
   ErrorInfo _processNetworkError(dynamic error) {
-    String message;
-    if (error.toString().contains('SocketException')) {
-      message = 'No internet connection';
-    } else if (error.toString().contains('TimeoutException')) {
-      message = 'Request timed out';
-    } else {
-      message = 'Network error';
-    }
-
     return ErrorInfo(
-      message: message,
+      message: 'Network connection error',
       type: ErrorType.network,
-      severity: ErrorSeverity.warning,
+      severity: ErrorSeverity.error,
     );
   }
 
   ErrorInfo _processFormatError(dynamic error) {
     return ErrorInfo(
-      message: 'Invalid response from server',
-      type: ErrorType.server,
+      message: 'Invalid data format',
+      type: ErrorType.validation,
       severity: ErrorSeverity.error,
     );
   }
@@ -155,6 +165,44 @@ class ErrorHandlerService {
       type: ErrorType.unknown,
       severity: ErrorSeverity.error,
     );
+  }
+
+  ErrorInfo? _processJsonError(dynamic error) {
+    try {
+      if (error is String) {
+        final data = json.decode(error);
+        if (data is Map<String, dynamic>) {
+          final message = data['message'] ?? data['error'] ?? error.toString();
+          final code = data['error_code'];
+
+          if (message.contains('expired') || message.contains('AccessDenied')) {
+            return ErrorInfo(
+              message: message,
+              type: ErrorType.session,
+              severity: ErrorSeverity.error,
+              code: code,
+              data: data,
+            );
+          }
+        }
+      } else if (error is Map<String, dynamic>) {
+        final message = error['message'] ?? error['error'] ?? error.toString();
+        final code = error['error_code'];
+
+        if (message.contains('expired') || message.contains('AccessDenied')) {
+          return ErrorInfo(
+            message: message,
+            type: ErrorType.session,
+            severity: ErrorSeverity.error,
+            code: code,
+            data: error,
+          );
+        }
+      }
+    } catch (e) {
+      // If JSON parsing fails, return null to fall back to generic error
+    }
+    return null;
   }
 
   ErrorInfo _processXmlError(String responseBody, int statusCode) {

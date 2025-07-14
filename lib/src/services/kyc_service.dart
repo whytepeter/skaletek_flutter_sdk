@@ -16,12 +16,15 @@ class KYCService {
 
   KYCConfig? _config;
   KYCStateProvider? _stateProvider;
+  bool _disposed = false;
 
   KYCStateProvider? get stateProvider => _stateProvider;
 
   /// Show a snackbar message
   void showSnackbar(String message) {
-    _onShowSnackbar?.call(message);
+    if (!_disposed && _onShowSnackbar != null) {
+      _onShowSnackbar!.call(message);
+    }
   }
 
   // Global error handler callback
@@ -30,7 +33,18 @@ class KYCService {
 
   /// Public method to call the onComplete callback
   void callOnComplete(KYCResult data) {
-    _onComplete?.call(data);
+    if (!_disposed && _onComplete != null) {
+      _onComplete!.call(data);
+    }
+  }
+
+  /// Dispose the service to prevent memory leaks
+  void dispose() {
+    _onComplete = null;
+    _onShowSnackbar = null;
+    _stateProvider = null;
+    _config = null;
+    _disposed = true;
   }
 
   Future<void> initialize(
@@ -80,11 +94,6 @@ class KYCService {
       safePrint('Creating liveness session...');
       final uri = Uri.parse('$_baseUrl/liveness');
 
-      safePrint('Request URL: $uri');
-      safePrint(
-        'Request headers: Authorization: Bearer ${_config!.token.substring(0, 10)}...',
-      );
-
       final response = await http.post(
         uri,
         headers: {
@@ -93,27 +102,15 @@ class KYCService {
         },
       );
 
-      safePrint('Liveness session response status: ${response.statusCode}');
-      safePrint('Liveness session response body: ${response.body}');
+      // Use helper method to check for errors
+      final data = _checkResponseForErrors(response, context: 'createSession');
 
-      if (response.statusCode != 200) {
-        safePrint('Error: HTTP ${response.statusCode} - ${response.body}');
-        throw SessionError(
-          'Failed to create liveness session: HTTP ${response.statusCode}',
-        );
-      }
-
-      final data = json.decode(response.body);
       final livenessToken = data['liveness_token'];
 
       if (livenessToken == null || livenessToken.isEmpty) {
-        safePrint('Error: No liveness token in response');
         throw SessionError('Could not get liveness token from response');
       }
 
-      safePrint(
-        'Successfully created liveness session with token: ${livenessToken.substring(0, 10)}...',
-      );
       return livenessToken;
     }, context: 'createSession');
   }
@@ -144,16 +141,12 @@ class KYCService {
         body: json.encode({'liveness_token': livenessToken}),
       );
 
-      safePrint('Liveness result response: ${response.body}');
+      // Use helper method to check for errors
+      final data = _checkResponseForErrors(response, context: 'getResult');
 
-      final data = json.decode(response.body);
       final success = data['success'] ?? false;
       final redirectUrl = data['redirect_url'] ?? '';
       final remainingTries = data['remaining_tries'] ?? 0;
-
-      if (data['type'] == 'validation_error' || data['message'] != null) {
-        throw SessionError(data['message'] ?? 'Validation error');
-      }
 
       return GetResultResponse(
         selfieName: livenessToken,
@@ -185,9 +178,9 @@ class KYCService {
         },
       );
 
-      safePrint('Verify identity response: ${response.body}');
+      // Use helper method to check for errors
+      final data = _checkResponseForErrors(response, context: 'verifyIdentity');
 
-      final data = json.decode(response.body);
       final redirectUrl = data['redirect_url'];
 
       if (redirectUrl == null) {
@@ -204,7 +197,7 @@ class KYCService {
       throw SessionError('Service not initialized');
     }
 
-    try {
+    final result = await _safeApiCall(() async {
       safePrint('Getting presigned URLs...');
       final uri = Uri.parse('$_baseUrl/presign');
       final response = await http.post(
@@ -215,35 +208,27 @@ class KYCService {
         },
       );
 
-      safePrint('Presigned URLs response: ${response.body}');
-
-      final data = json.decode(response.body);
-
-      if (data == null) {
-        throw SessionError('Could not get presigned URLs');
-      }
+      // Use helper method to check for errors
+      final data = _checkResponseForErrors(
+        response,
+        context: 'getPresignedUrls',
+      );
 
       PresignedUrl presignedUrl = PresignedUrl.fromMap(data);
 
       await _stateProvider!.setPresignedUrl(presignedUrl);
       return presignedUrl;
-    } catch (e) {
-      if (e is SessionError) rethrow;
+    }, context: 'getPresignedUrls');
 
-      try {
-        final errorData = json.decode(e.toString());
-        final message =
-            errorData['message'] ?? errorData['error'] ?? 'An error occurred';
-        throw SessionError(message, redirectUrl: errorData['redirect_url']);
-      } catch (_) {
-        throw SessionError('An error occurred');
-      }
+    if (result == null) {
+      throw SessionError('Failed to get presigned URLs');
     }
+    return result;
   }
 
   /// Detect document in image
   Future<List<double>?> detectDocument(File file) async {
-    try {
+    final result = await _safeApiCall(() async {
       safePrint('Detecting document...');
       final uri = Uri.parse('$_mlBaseUrl/detection/document');
 
@@ -253,35 +238,30 @@ class KYCService {
 
       final streamedResponse = await request.send();
       final response = await http.Response.fromStream(streamedResponse);
-      final data = json.decode(response.body);
 
-      safePrint('Document detection response: ${response.body}');
+      // Use helper method to check for errors
+      final data = _checkResponseForErrors(response, context: 'detectDocument');
 
       final success = data['success'] ?? false;
       final bbox = data['bbox'];
 
       if (!success) {
         safePrint('Warning: Unable to detect ID');
-        return null;
+        return <double>[]; // Return empty list instead of null
       }
 
       if (bbox != null && bbox is List && bbox.length == 4) {
         return bbox.map((e) => (e as num).toDouble()).toList();
       }
 
+      return <double>[]; // Return empty list instead of null
+    }, context: 'detectDocument');
+
+    // Convert empty list back to null for the public API
+    if (result != null && result.isEmpty) {
       return null;
-    } catch (e) {
-      try {
-        final errorData = json.decode(e.toString());
-        final message =
-            errorData['message'] ??
-            errorData['liveness_error'] ??
-            'An error occurred';
-        throw SessionError(message, redirectUrl: errorData['redirect_url']);
-      } catch (_) {
-        throw SessionError('An error occurred');
-      }
     }
+    return result;
   }
 
   /// Upload front document using presigned URL
@@ -294,11 +274,50 @@ class KYCService {
     await _uploadDocumentWithSignedUrl(file, presignedUrl.back);
   }
 
+  /// Helper method to check multipart upload response for errors
+  Future<void> _checkMultipartResponseForErrors(
+    http.StreamedResponse response, {
+    String? context,
+  }) async {
+    if (response.statusCode == 200 ||
+        response.statusCode == 201 ||
+        response.statusCode == 204) {
+      return; // Success
+    }
+
+    final responseBody = await response.stream.bytesToString();
+
+    // Try to extract actual error message from response body
+    try {
+      final errorData = json.decode(responseBody);
+      final message =
+          errorData['message']?.toString() ??
+          errorData['error']?.toString() ??
+          'Upload failed with status ${response.statusCode}';
+      throw SessionError(message, redirectUrl: errorData['redirect_url']);
+    } catch (jsonError) {
+      // If JSON parsing fails, use the error handler service
+      final errorHandler = ErrorHandlerService();
+      final errorInfo = errorHandler.processUploadError(
+        responseBody,
+        response.statusCode,
+      );
+      final message = errorHandler.getUserMessage(errorInfo);
+      throw SessionError(message);
+    }
+  }
+
   /// Private method to upload a document using a SignedUrl (front or back)
   Future<void> _uploadDocumentWithSignedUrl(
     File file,
     SignedUrl signedUrl,
   ) async {
+    // Validate the signed URL before proceeding
+    if (signedUrl.url.isEmpty) {
+      safePrint('Error: Signed URL is empty');
+      throw SessionError('Invalid upload URL: URL is empty');
+    }
+
     safePrint('Uploading document to: ${signedUrl.url}');
     final request = http.MultipartRequest('POST', Uri.parse(signedUrl.url));
 
@@ -311,53 +330,8 @@ class KYCService {
 
     final response = await request.send();
 
-    if (response.statusCode != 200 &&
-        response.statusCode != 201 &&
-        response.statusCode != 204) {
-      final responseBody = await response.stream.bytesToString();
-      safePrint('Upload response status: ${response.statusCode}');
-      safePrint('Upload response body: $responseBody');
-
-      final errorHandler = ErrorHandlerService();
-      final errorInfo = errorHandler.processUploadError(
-        responseBody,
-        response.statusCode,
-      );
-      final message = errorHandler.getUserMessage(errorInfo);
-      throw SessionError(message);
-    }
-  }
-
-  Future<KYCResult> getVerificationStatus(String verificationId) async {
-    try {
-      if (_config == null) {
-        return KYCResult.failure(status: KYCStatus.failure);
-      }
-
-      final uri = Uri.parse('$_baseUrl/status/$verificationId');
-      final response = await http.get(
-        uri,
-        headers: {
-          'Authorization': 'Bearer ${_config!.token}',
-          'Content-Type': 'application/json',
-        },
-      );
-
-      final data = json.decode(response.body);
-      final statusValue = data['status']?.toString().toUpperCase();
-
-      if (response.statusCode == 200) {
-        KYCStatus status = KYCStatus.values.firstWhere(
-          (s) => s.value == statusValue,
-          orElse: () => KYCStatus.success,
-        );
-        return KYCResult.success(status: status);
-      } else {
-        return KYCResult.failure(status: KYCStatus.failure);
-      }
-    } catch (e) {
-      return KYCResult.failure(status: KYCStatus.failure);
-    }
+    // Check for errors using specialized helper for multipart uploads
+    await _checkMultipartResponseForErrors(response, context: 'uploadDocument');
   }
 
   // Centralized error handler instance
@@ -365,18 +339,73 @@ class KYCService {
 
   /// Global error handler for all API calls
   void _handleError(dynamic error, {String? context}) {
+    safePrint('error: $error');
     final errorInfo = _errorHandler.processError(error, context: context);
+
+    // Check if service has been disposed
+    if (_disposed) {
+      safePrint('Service has been disposed, skipping error handling');
+      return;
+    }
 
     // Show user-friendly message
     final userMessage = _errorHandler.getUserMessage(errorInfo);
-    _onShowSnackbar?.call(userMessage);
+    if (_onShowSnackbar != null) {
+      _onShowSnackbar!.call(userMessage);
+    }
+
+    // Check for session expiration
+    if (errorInfo.message.contains('session expired') ||
+        errorInfo.message.contains('session expired or complete')) {
+      // Check if onComplete callback is still valid before calling it
+      if (_onComplete != null) {
+        _onComplete!.call(KYCResult.failure(status: KYCStatus.failure));
+      }
+      return;
+    }
 
     // Re-throw the error so it can be caught by the calling method
     if (error is SessionError) {
       throw error;
     } else {
+      // Use the actual message from the error info, not a generic one
       throw SessionError(errorInfo.message);
     }
+  }
+
+  /// Helper method to check response for errors and extract data
+  Map<String, dynamic> _checkResponseForErrors(
+    http.Response response, {
+    String? context,
+  }) {
+    final responseBody = response.body;
+    safePrint('${context ?? 'API'} response: $responseBody');
+
+    Map<String, dynamic> data;
+    try {
+      data = json.decode(responseBody);
+    } catch (e) {
+      throw SessionError('Invalid response format: $responseBody');
+    }
+
+    // Check for error messages in response body (regardless of HTTP status)
+    if (data is Map<String, dynamic>) {
+      final message = data['message']?.toString() ?? '';
+      if (message.isNotEmpty) {
+        throw SessionError(message, redirectUrl: data['redirect_url']);
+      }
+    }
+
+    // Check HTTP status code
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      final message =
+          data['message']?.toString() ??
+          data['error']?.toString() ??
+          'HTTP ${response.statusCode} error';
+      throw SessionError(message, redirectUrl: data['redirect_url']);
+    }
+
+    return data;
   }
 
   /// Safe API call wrapper

@@ -46,8 +46,13 @@ class SignedUrl {
   SignedUrl({required this.url, required this.fields});
 
   factory SignedUrl.fromMap(Map<String, dynamic> map) {
+    final url = map['url'] ?? '';
+    if (url.isEmpty) {
+      throw SessionError('Invalid presigned URL: URL is empty or missing');
+    }
+
     return SignedUrl(
-      url: map['url'] ?? '',
+      url: url,
       fields: Fields.fromMap(Map<String, dynamic>.from(map['fields'] ?? {})),
     );
   }
@@ -64,9 +69,21 @@ class PresignedUrl {
   PresignedUrl({required this.front, required this.back});
 
   factory PresignedUrl.fromMap(Map<String, dynamic> map) {
+    final frontMap = map['front'];
+    final backMap = map['back'];
+
+    if (frontMap == null) {
+      throw SessionError(
+        'Invalid presigned URL response: front URL is missing',
+      );
+    }
+    if (backMap == null) {
+      throw SessionError('Invalid presigned URL response: back URL is missing');
+    }
+
     return PresignedUrl(
-      front: SignedUrl.fromMap(Map<String, dynamic>.from(map['front'] ?? {})),
-      back: SignedUrl.fromMap(Map<String, dynamic>.from(map['back'] ?? {})),
+      front: SignedUrl.fromMap(Map<String, dynamic>.from(frontMap)),
+      back: SignedUrl.fromMap(Map<String, dynamic>.from(backMap)),
     );
   }
 

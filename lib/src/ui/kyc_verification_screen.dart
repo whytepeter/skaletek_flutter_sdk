@@ -40,6 +40,7 @@ class _KYCVerificationScreenState extends State<KYCVerificationScreen> {
 
   @override
   void dispose() {
+    _kycService.dispose();
     super.dispose();
   }
 

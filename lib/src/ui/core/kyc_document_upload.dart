@@ -251,6 +251,18 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
     final provider = widget.kycService.stateProvider;
     final uploadTasks = <Future<void>>[];
 
+    // Debug: Log presigned URL information
+    safePrint('Performing document uploads...');
+    safePrint('Presigned URL available: ${_presignedUrl != null}');
+    if (_presignedUrl != null) {
+      safePrint('Front URL: ${_presignedUrl!.front.url}');
+      safePrint('Back URL: ${_presignedUrl!.back.url}');
+    }
+    safePrint('Front document: ${_frontDocument?.path}');
+    safePrint('Back document: ${_backDocument?.path}');
+    safePrint('Front uploaded: ${provider?.frontDocumentUploaded}');
+    safePrint('Back uploaded: ${provider?.backDocumentUploaded}');
+
     // Helper function to add upload task if document needs uploading
     void addUploadTaskIfNeeded({
       required ImageFile? document,
@@ -260,6 +272,7 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
     }) {
       if (document != null && !isUploaded) {
         final file = File(document.path);
+        safePrint('Adding upload task for file: ${file.path}');
         uploadTasks.add(uploadFunction(file, _presignedUrl!));
       } else if (document != null) {
         safePrint('Document already uploaded, skipping...');
@@ -279,6 +292,8 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
       isUploaded: provider?.backDocumentUploaded ?? false,
       uploadFunction: widget.kycService.uploadBackDocument,
     );
+
+    safePrint('Total upload tasks: ${uploadTasks.length}');
 
     if (uploadTasks.isNotEmpty) {
       await Future.wait(uploadTasks);

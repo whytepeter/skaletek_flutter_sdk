@@ -1,4 +1,3 @@
-import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:face_liveness_detector/face_liveness_detector.dart';
 import 'package:flutter/material.dart';
 import 'package:skaletek_kyc_flutter/src/config/app_config.dart';
@@ -34,10 +33,12 @@ class _KYCFaceVerificationState extends State<KYCFaceVerification> {
   String _sessionId = '';
   bool _showLivenessDetector = false;
   bool _isVerifying = false;
+  bool _isHandlingError = false; // Flag to prevent multiple error handling
 
   Future<void> _startLivenessCheck() async {
     setState(() {
       _isLoading = true;
+      _isHandlingError = false; // Reset error handling flag
     });
 
     // return _onLivenessComplete(); //this is for testing purposes
@@ -46,23 +47,11 @@ class _KYCFaceVerificationState extends State<KYCFaceVerification> {
       final res = await widget.kycService.createSession();
 
       if (res != null) {
-        safePrint(
-          'Session created successfully, starting liveness detector...',
-        );
-
         setState(() {
           _sessionId = res;
           _showLivenessDetector = true;
         });
-      } else {
-        safePrint('Session creation returned null');
-
-        throw Exception('Failed to create liveness session');
       }
-    } catch (e) {
-      // Error will be handled by global error handler
-
-      safePrint('Error creating session: $e');
     } finally {
       setState(() {
         _isLoading = false;
@@ -148,10 +137,23 @@ class _KYCFaceVerificationState extends State<KYCFaceVerification> {
   }
 
   void _onLivenessError(String error) {
+    // Prevent multiple error handling for the same error
+    if (_isHandlingError) return;
     setState(() {
+      _isHandlingError = true;
       _showLivenessDetector = false;
     });
-    safePrint('Error: $error');
+
+    widget.kycService.showSnackbar(error);
+
+    // Reset the flag after a short delay
+    Future.delayed(Duration(milliseconds: 500), () {
+      if (mounted) {
+        setState(() {
+          _isHandlingError = false;
+        });
+      }
+    });
   }
 
   @override
