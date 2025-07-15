@@ -85,8 +85,8 @@ class ImageCropper {
         'ImageCropper: Cropped image size: ${croppedImage.width}x${croppedImage.height}',
       );
 
-      // Encode the cropped image
-      final croppedBytes = img.encodeJpg(croppedImage, quality: 90);
+      // Encode the cropped image as PNG for consistent format
+      final croppedBytes = img.encodePng(croppedImage);
       return Uint8List.fromList(croppedBytes);
     } catch (e) {
       safePrint('ImageCropper: Error cropping image: $e');
@@ -104,11 +104,9 @@ class ImageCropper {
     String originalPath,
   ) async {
     try {
-      final originalFile = File(originalPath);
-      final extension = originalFile.path.split('.').last;
       final tempDir = Directory.systemTemp;
       final tempFile = File(
-        '${tempDir.path}/cropped_${DateTime.now().millisecondsSinceEpoch}.$extension',
+        '${tempDir.path}/cropped_${DateTime.now().millisecondsSinceEpoch}.png',
       );
 
       await tempFile.writeAsBytes(croppedBytes);

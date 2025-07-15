@@ -3,9 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:skaletek_kyc_flutter/src/models/kyc_api_models.dart';
 import 'package:skaletek_kyc_flutter/src/ui/shared/app_color.dart';
 import 'dart:developer' as developer;
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 import 'detection_checks_list.dart';
 import 'feedback_box.dart';
 import 'camera_service.dart';
+import '../../../utils/image_cropper.dart';
 
 class KYCCameraCapture extends StatefulWidget {
   final void Function(XFile file, {bool isAutoCapture})? onCapture;
@@ -246,11 +249,116 @@ class _KYCCameraCaptureState extends State<KYCCameraCapture>
   void _capture() async {
     if (_controller != null && _controller!.value.isInitialized && _isActive) {
       try {
+        // Ensure flash is off before taking picture
+        if (_controller!.value.flashMode != FlashMode.off) {
+          await _controller!.setFlashMode(FlashMode.off);
+        }
+
         final file = await _controller!.takePicture();
-        widget.onCapture?.call(file, isAutoCapture: false);
+        final originalBytes = await file.readAsBytes();
+
+        // Convert to PNG format
+        final pngBytes = await _convertToPng(originalBytes);
+
+        // Get actual image dimensions
+        final codec = await ui.instantiateImageCodec(pngBytes);
+        final frame = await codec.getNextFrame();
+        final actualImage = frame.image;
+        final imageWidth = actualImage.width.toDouble();
+        final imageHeight = actualImage.height.toDouble();
+
+        // Get camera preview size (note: in portrait mode, width/height are swapped)
+        final previewSize = _controller!.value.previewSize!;
+        final cameraWidth = previewSize.height
+            .toDouble(); // Actual camera width in portrait
+        final cameraHeight = previewSize.width
+            .toDouble(); // Actual camera height in portrait
+
+        // Calculate how the camera preview is displayed on screen
+        final screenWidth = _screenSize.width;
+        final screenHeight = _screenSize.height;
+
+        // Camera preview is typically scaled to fill the screen height and center-cropped for width
+        final previewScale = screenHeight / cameraHeight;
+        final scaledPreviewWidth = cameraWidth * previewScale;
+
+        // If scaled preview is wider than screen, it gets center-cropped
+        final cropOffsetX = (scaledPreviewWidth - screenWidth) / 2;
+
+        // Calculate the actual scaling from screen coordinates to image coordinates
+        final scaleX = imageWidth / cameraWidth;
+        final scaleY = imageHeight / cameraHeight;
+
+        developer.log('Image dimensions: ${imageWidth}x${imageHeight}');
+        developer.log('Camera dimensions: ${cameraWidth}x${cameraHeight}');
+        developer.log('Screen dimensions: ${screenWidth}x${screenHeight}');
+        developer.log('Preview scale: $previewScale');
+        developer.log('Scaled preview width: $scaledPreviewWidth');
+        developer.log('Crop offset X: $cropOffsetX');
+        developer.log('Image scale factors: scaleX=$scaleX, scaleY=$scaleY');
+
+        // Transform target rectangle from screen coordinates to camera coordinates
+        final cameraTargetRect = Rect.fromLTWH(
+          (_targetRect.left + cropOffsetX) / previewScale,
+          _targetRect.top / previewScale,
+          _targetRect.width / previewScale,
+          _targetRect.height / previewScale,
+        );
+
+        // Then scale from camera coordinates to actual image coordinates
+        final imageTargetRect = Rect.fromLTWH(
+          cameraTargetRect.left * scaleX,
+          cameraTargetRect.top * scaleY,
+          cameraTargetRect.width * scaleX,
+          cameraTargetRect.height * scaleY,
+        );
+
+        developer.log('Original target rect: $_targetRect');
+        developer.log('Camera target rect: $cameraTargetRect');
+        developer.log('Final image target rect: $imageTargetRect');
+
+        // Convert to bbox format for cropping
+        final targetBboxList = [
+          imageTargetRect.left,
+          imageTargetRect.top,
+          imageTargetRect.right,
+          imageTargetRect.bottom,
+        ];
+
+        final croppedBytes = await ImageCropper.cropImage(
+          pngBytes,
+          targetBboxList,
+        );
+        final croppedPath = await ImageCropper.saveCroppedImage(
+          croppedBytes,
+          file.path.replaceAll('.jpg', '.png'),
+        );
+
+        final croppedFile = XFile(croppedPath);
+        widget.onCapture?.call(croppedFile, isAutoCapture: false);
+
+        developer.log(
+          'Manual capture completed with proper coordinate transformation',
+        );
       } catch (e) {
         developer.log('Error capturing image: $e');
       }
+    }
+  }
+
+  /// Converts any image format to PNG
+  Future<Uint8List> _convertToPng(Uint8List bytes) async {
+    try {
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      final image = frame.image;
+
+      // Convert to PNG format
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      return byteData!.buffer.asUint8List();
+    } catch (e) {
+      developer.log('Error converting to PNG: $e');
+      return bytes; // Return original if conversion fails
     }
   }
 
@@ -305,7 +413,8 @@ class _KYCCameraCaptureState extends State<KYCCameraCapture>
 
             // UI controls
             _buildCloseButton(),
-            if (!_feedback.autoCaptured) _buildCaptureButton(),
+            if (!_feedback.autoCaptured && _feedback.connected)
+              _buildCaptureButton(),
           ],
         ),
       ),

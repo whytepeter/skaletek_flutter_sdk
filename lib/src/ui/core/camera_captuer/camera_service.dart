@@ -8,7 +8,7 @@
 /// - Debounced feedback updates
 /// - Enhanced error handling and connection management
 /// - Performance monitoring and automatic quality adjustment
-/// - Base64 image encoding to match web implementation
+/// - PNG image encoding for consistent format
 
 import 'dart:async';
 import 'dart:collection';
@@ -253,12 +253,13 @@ class CameraService {
         _emitFeedback(
           DetectionFeedback(
             message: 'Fit ID card in the box',
-            checks: _lastChecks,
+            checks: const DetectionChecks(),
             connecting: false,
             connected: true,
             analyzing: false,
             autoCaptured: false,
             feedbackState: FeedbackState.info,
+            bbox: null,
           ),
         );
         return;
@@ -441,11 +442,14 @@ class CameraService {
       final XFile file = await cameraController.takePicture();
       final bytes = await file.readAsBytes();
 
-      // Convert to base64 data URL format (similar to web implementation)
-      String base64Image = base64Encode(bytes);
-      String dataURL = 'data:image/jpeg;base64,$base64Image';
+      // Convert JPEG to PNG for consistent format
+      final pngBytes = await _convertToPng(bytes);
 
-      developer.log('Created data URL with length: ${dataURL.length}');
+      // Convert to base64 data URL format (similar to web implementation)
+      String base64Image = base64Encode(pngBytes);
+      String dataURL = 'data:image/png;base64,$base64Image';
+
+      developer.log('Created PNG data URL with length: ${dataURL.length}');
 
       // Convert data URL to ArrayBuffer (matching web implementation)
       return _dataURLToArrayBuffer(dataURL);
@@ -474,13 +478,29 @@ class CameraService {
     return bytes;
   }
 
+  /// Converts any image format to PNG
+  Future<Uint8List> _convertToPng(Uint8List bytes) async {
+    try {
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      final image = frame.image;
+
+      // Convert to PNG format with quality optimization
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      return byteData!.buffer.asUint8List();
+    } catch (e) {
+      developer.log('Error converting to PNG: $e');
+      return bytes; // Return original if conversion fails
+    }
+  }
+
   Future<Uint8List> _compressImage(Uint8List bytes) async {
     try {
       final codec = await ui.instantiateImageCodec(bytes);
       final frame = await codec.getNextFrame();
       final image = frame.image;
 
-      // Reduce image size for better performance
+      // Reduce image size for better performance and ensure PNG format
       final resizedImage = await _resizeImage(image, 0.8);
       final byteData = await resizedImage.toByteData(
         format: ui.ImageByteFormat.png,
@@ -577,7 +597,7 @@ class CameraService {
       _emitFeedback(
         DetectionFeedback(
           message: 'Fit ID card in the box',
-          checks: checks,
+          checks: const DetectionChecks(),
           connecting: false,
           connected: true,
           analyzing: false,
@@ -679,11 +699,15 @@ class CameraService {
       }
 
       final XFile file = await cameraController.takePicture();
+      final originalBytes = await file.readAsBytes();
+
+      // Convert to PNG format
+      final pngBytes = await _convertToPng(originalBytes);
+
       XFile resultFile = file;
 
       // If bbox is available, crop the image
       if (_lastBbox != null) {
-        final bytes = await file.readAsBytes();
         // Convert bbox to [x1, y1, x2, y2]
         final bboxList = [
           _lastBbox!.left,
@@ -691,12 +715,19 @@ class CameraService {
           _lastBbox!.right,
           _lastBbox!.bottom,
         ];
-        final croppedBytes = await ImageCropper.cropImage(bytes, bboxList);
+        final croppedBytes = await ImageCropper.cropImage(pngBytes, bboxList);
         final croppedPath = await ImageCropper.saveCroppedImage(
           croppedBytes,
-          file.path,
+          file.path.replaceAll('.jpg', '.png'),
         );
         resultFile = XFile(croppedPath);
+      } else {
+        // Save PNG version even without cropping
+        final pngPath = await ImageCropper.saveCroppedImage(
+          pngBytes,
+          file.path.replaceAll('.jpg', '.png'),
+        );
+        resultFile = XFile(pngPath);
       }
 
       _autoCaptureController.add(resultFile);
