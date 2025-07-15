@@ -297,11 +297,12 @@ class FileInputState extends State<FileInput> {
 
   Widget _buildMainContainer() {
     final borderColor = _getBorderColor();
+    final bool isInteractionDisabled = widget.disabled || _isDetecting;
 
     return Opacity(
-      opacity: widget.disabled ? 0.5 : 1.0,
+      opacity: isInteractionDisabled ? 0.5 : 1.0,
       child: GestureDetector(
-        onTap: widget.disabled
+        onTap: isInteractionDisabled
             ? null
             : (widget.showCameraIcon && widget.onCameraPressed != null)
             ? widget.onCameraPressed

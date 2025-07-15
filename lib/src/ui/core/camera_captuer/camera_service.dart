@@ -29,6 +29,24 @@ import '../../../utils/image_cropper.dart';
 /// Feedback state for UI overlays
 enum FeedbackState { info, error, success }
 
+/// Feedback message types for better organization
+enum FeedbackMessage {
+  default_('Fit ID card in the box'),
+  good('Right spot! Hold steady'),
+  tooLow('Too low — raise it a bit.'),
+  tooHigh('Too high — lower it a bit.'),
+  moveLeft('Move left slightly.'),
+  moveRight('Move right slightly.'),
+  connecting('Connecting…'),
+  disconnected('Disconnected. Reconnecting…'),
+  connectionError('Connection error. Reconnecting…'),
+  processingError('Processing error occurred'),
+  captured('Captured!');
+
+  const FeedbackMessage(this.text);
+  final String text;
+}
+
 class DetectionFeedback {
   final String message;
   final DetectionChecks checks;
@@ -101,6 +119,7 @@ class CameraService {
   final Rect targetRect;
   final Duration steadyDelay;
   final void Function(DetectionChecks) onChecks;
+  final Size screenSize; // Add screen size for coordinate transformation
 
   // Adaptive configuration
   Duration _currentDetectionInterval = const Duration(milliseconds: 100);
@@ -141,7 +160,8 @@ class CameraService {
     required this.cameraController,
     required this.targetRect,
     required this.onChecks,
-    this.steadyDelay = const Duration(milliseconds: 2000), // Changed to 2s
+    required this.screenSize, // Add required screen size parameter
+    this.steadyDelay = const Duration(milliseconds: 3000), // Changed to 2s
   }) {
     _startPerformanceMonitoring();
   }
@@ -155,7 +175,7 @@ class CameraService {
     _connecting = true;
     _emitFeedback(
       DetectionFeedback(
-        message: 'Connecting…',
+        message: FeedbackMessage.connecting.text,
         checks: _lastChecks,
         connecting: true,
         connected: false,
@@ -252,7 +272,7 @@ class CameraService {
         developer.log('Server returned error response: $data');
         _emitFeedback(
           DetectionFeedback(
-            message: 'Fit ID card in the box',
+            message: FeedbackMessage.default_.text,
             checks: const DetectionChecks(),
             connecting: false,
             connected: true,
@@ -283,12 +303,18 @@ class CameraService {
       Rect? bbox;
       if (bboxList is List && bboxList.length == 4) {
         try {
-          bbox = Rect.fromLTWH(
-            (bboxList[0] as num).toDouble(),
-            (bboxList[1] as num).toDouble(),
-            (bboxList[2] as num).toDouble(),
-            (bboxList[3] as num).toDouble(),
+          // Most ML services return bbox as [left, top, right, bottom] (LTRB format)
+          final left = (bboxList[0] as num).toDouble();
+          final top = (bboxList[1] as num).toDouble();
+          final right = (bboxList[2] as num).toDouble();
+          final bottom = (bboxList[3] as num).toDouble();
+
+          bbox = Rect.fromLTRB(left, top, right, bottom);
+
+          developer.log(
+            'Parsed bbox LTRB: left=$left, top=$top, right=$right, bottom=$bottom',
           );
+          developer.log('Converted to Rect: $bbox');
         } catch (e) {
           developer.log('Error parsing bbox: $e');
           bbox = null;
@@ -311,7 +337,7 @@ class CameraService {
       // Emit error feedback to user
       _emitFeedback(
         DetectionFeedback(
-          message: 'Processing error occurred',
+          message: FeedbackMessage.processingError.text,
           checks: _lastChecks,
           connecting: false,
           connected: true,
@@ -333,7 +359,7 @@ class CameraService {
 
     _emitFeedback(
       DetectionFeedback(
-        message: 'Disconnected. Reconnecting…',
+        message: FeedbackMessage.disconnected.text,
         checks: _lastChecks,
         connecting: true,
         connected: false,
@@ -356,7 +382,7 @@ class CameraService {
     developer.log('WebSocket error occurred: $error');
     _emitFeedback(
       DetectionFeedback(
-        message: 'Connection error. Reconnecting…',
+        message: FeedbackMessage.connectionError.text,
         checks: _lastChecks,
         connecting: true,
         connected: false,
@@ -401,22 +427,6 @@ class CameraService {
       _lastFrameTime = now;
 
       _pendingRequest = true;
-
-      // We're actually connected
-      if (_connected) {
-        _emitFeedback(
-          DetectionFeedback(
-            message: 'Fit ID card in the box',
-            checks: _lastChecks,
-            connecting: false,
-            connected: true,
-            analyzing: true,
-            autoCaptured: false,
-            bbox: _lastBbox,
-            feedbackState: FeedbackState.info,
-          ),
-        );
-      }
 
       try {
         final arrayBuffer = await _captureOptimizedImageAsArrayBuffer();
@@ -591,12 +601,12 @@ class CameraService {
     _lastChecks = checks;
 
     if (bbox == null) {
-      _insideSince = null;
-      _steadyTimer?.cancel();
-      _lastBbox = null; // Reset last bbox when bbox is null
+      _lastBbox = null;
+      _resetSteadyState();
+      developer.log('No bbox detected');
       _emitFeedback(
         DetectionFeedback(
-          message: 'Fit ID card in the box',
+          message: FeedbackMessage.default_.text,
           checks: const DetectionChecks(),
           connecting: false,
           connected: true,
@@ -611,18 +621,33 @@ class CameraService {
 
     _lastBbox = bbox; // Always update last bbox if not null
 
-    final feedback = _bboxFeedback(bbox);
-    final isInRightSpot = feedback == 'Right spot! Hold steady';
+    // Transform bbox from image coordinates to screen coordinates for proper comparison
+    final screenBbox = _transformBboxToScreenCoordinates(bbox);
 
-    if (isInRightSpot) {
-      if (_insideSince == null) {
-        _insideSince = DateTime.now();
-        _steadyTimer?.cancel();
-        _steadyTimer = Timer(steadyDelay, _autoCapture);
-      }
+    developer.log('Original bbox (image coords): $bbox');
+    developer.log('Transformed bbox (screen coords): $screenBbox');
+    developer.log('Target rect (screen coords): $targetRect');
+
+    final feedback = _bboxFeedback(screenBbox);
+    final isInside = feedback == FeedbackMessage.good.text;
+    final passAllChecks = _areAllDetectionChecksPassed();
+
+    developer.log('Feedback message: $feedback');
+    developer.log('Is inside: $isInside, Pass all checks: $passAllChecks');
+
+    // Match web logic: if (isInside && bbox && passAllChecks)
+    if (isInside && passAllChecks) {
+      // Only start timer if one isn't already running
+      if (_steadyTimer == null || !_steadyTimer!.isActive) return;
+      _steadyTimer = Timer(steadyDelay, () {
+        developer.log('Auto-capture timer completed - triggering capture');
+        _autoCapture();
+      });
+      developer.log(
+        'Started timer - waiting ${steadyDelay.inMilliseconds}ms for auto-capture',
+      );
     } else {
-      _insideSince = null;
-      _steadyTimer?.cancel();
+      _resetSteadyState();
     }
 
     _emitFeedback(
@@ -634,11 +659,109 @@ class CameraService {
         analyzing: false,
         autoCaptured: false,
         bbox: bbox,
-        feedbackState: isInRightSpot
-            ? FeedbackState.success
-            : FeedbackState.error,
+        feedbackState: _getFeedbackStateFromMessage(feedback),
       ),
     );
+  }
+
+  /// Reset steady state - matches web resetSteadyState()
+  void _resetSteadyState() {
+    _steadyTimer?.cancel();
+    _steadyTimer = null;
+    _insideSince = null;
+    developer.log('Reset steady state');
+  }
+
+  /// Determine feedback state based on message content
+  FeedbackState _getFeedbackStateFromMessage(String message) {
+    if (message == FeedbackMessage.good.text) {
+      return FeedbackState.success;
+    } else if (message == FeedbackMessage.default_.text) {
+      return FeedbackState.info;
+    } else if (message == FeedbackMessage.processingError.text ||
+        message == FeedbackMessage.connectionError.text) {
+      return FeedbackState.error;
+    } else {
+      // Directional feedback (move left, right, up, down)
+      return FeedbackState.error;
+    }
+  }
+
+  /// Transform bbox coordinates from image space to screen space
+  Rect _transformBboxToScreenCoordinates(Rect imageBbox) {
+    try {
+      // Get camera preview size (note: in portrait mode, width/height are swapped)
+      final previewSize = cameraController.value.previewSize!;
+      final cameraWidth = previewSize.height
+          .toDouble(); // Actual camera width in portrait
+      final cameraHeight = previewSize.width
+          .toDouble(); // Actual camera height in portrait
+
+      // Calculate how the camera preview is displayed on screen
+      final screenWidth = screenSize.width;
+      final screenHeight = screenSize.height;
+
+      // Camera preview is typically scaled to fill the screen height and center-cropped for width
+      final previewScale = screenHeight / cameraHeight;
+      final scaledPreviewWidth = cameraWidth * previewScale;
+
+      // If scaled preview is wider than screen, it gets center-cropped
+      final cropOffsetX = (scaledPreviewWidth - screenWidth) / 2;
+
+      // Determine if bbox coordinates are normalized (0-1) or absolute pixels
+      Rect normalizedBbox;
+      if (imageBbox.left <= 1.0 &&
+          imageBbox.top <= 1.0 &&
+          imageBbox.right <= 1.0 &&
+          imageBbox.bottom <= 1.0) {
+        // Coordinates are normalized (0-1), convert to camera pixel coordinates
+        normalizedBbox = Rect.fromLTWH(
+          imageBbox.left * cameraWidth,
+          imageBbox.top * cameraHeight,
+          (imageBbox.right - imageBbox.left) * cameraWidth,
+          (imageBbox.bottom - imageBbox.top) * cameraHeight,
+        );
+        developer.log(
+          'Detected normalized coordinates, converted to: $normalizedBbox',
+        );
+      } else {
+        // Coordinates are already in pixel space (camera coordinates)
+        normalizedBbox = imageBbox;
+        developer.log('Using absolute pixel coordinates: $normalizedBbox');
+      }
+
+      // Transform: camera coordinates → screen coordinates
+
+      // Step 1: Scale from camera coordinates to screen preview coordinates
+      final previewRect = Rect.fromLTWH(
+        normalizedBbox.left * previewScale,
+        normalizedBbox.top * previewScale,
+        normalizedBbox.width * previewScale,
+        normalizedBbox.height * previewScale,
+      );
+
+      // Step 2: Adjust for center-crop offset to get final screen coordinates
+      final screenRect = Rect.fromLTWH(
+        previewRect.left - cropOffsetX,
+        previewRect.top,
+        previewRect.width,
+        previewRect.height,
+      );
+
+      developer.log('Camera dimensions: ${cameraWidth}x${cameraHeight}');
+      developer.log('Screen dimensions: ${screenWidth}x${screenHeight}');
+      developer.log('Preview scale: $previewScale');
+      developer.log('Scaled preview width: $scaledPreviewWidth');
+      developer.log('Crop offset X: $cropOffsetX');
+      developer.log('Preview rect: $previewRect');
+      developer.log('Final screen rect: $screenRect');
+
+      return screenRect;
+    } catch (e) {
+      developer.log('Error transforming bbox coordinates: $e');
+      // Return original bbox if transformation fails
+      return imageBbox;
+    }
   }
 
   void _emitFeedback(DetectionFeedback feedback) {
@@ -657,8 +780,12 @@ class CameraService {
   }
 
   String _bboxFeedback(Rect bbox) {
-    // Increased tolerance and relaxed inside check
-    const tolerance = 20.0;
+    developer.log('Bbox feedback calculation:');
+    developer.log('  bbox: $bbox');
+    developer.log('  targetRect: $targetRect');
+
+    // Check if bbox is properly contained within target rect with minimal tolerance
+    const tolerance = 20; // 20px
     final adjustedTargetRect = Rect.fromLTRB(
       targetRect.left - tolerance,
       targetRect.top - tolerance,
@@ -666,27 +793,96 @@ class CameraService {
       targetRect.bottom + tolerance,
     );
 
-    // Instead of requiring full containment, allow partial overlap with margin
-    final overlapWidth = (bbox.left < adjustedTargetRect.left)
-        ? adjustedTargetRect.left - bbox.left
-        : (bbox.right > adjustedTargetRect.right)
-        ? bbox.right - adjustedTargetRect.right
-        : 0.0;
-    final overlapHeight = (bbox.top < adjustedTargetRect.top)
-        ? adjustedTargetRect.top - bbox.top
-        : (bbox.bottom > adjustedTargetRect.bottom)
-        ? bbox.bottom - adjustedTargetRect.bottom
-        : 0.0;
-    // Allow up to 30px outside on any side
-    if (overlapWidth <= 30.0 && overlapHeight <= 30.0) {
-      return 'Right spot! Hold steady';
+    developer.log('  adjustedTargetRect: $adjustedTargetRect');
+
+    // Check if bbox is completely within the adjusted target rectangle
+    bool isCompletelyInside =
+        bbox.left >= adjustedTargetRect.left &&
+        bbox.top >= adjustedTargetRect.top &&
+        bbox.right <= adjustedTargetRect.right &&
+        bbox.bottom <= adjustedTargetRect.bottom;
+
+    developer.log('  isCompletelyInside: $isCompletelyInside');
+
+    // Check if all detection checks are PASS
+    bool allChecksPassed = _areAllDetectionChecksPassed();
+    developer.log('  allChecksPassed: $allChecksPassed');
+
+    if (isCompletelyInside && allChecksPassed) {
+      developer.log('  Result: ${FeedbackMessage.good.text}');
+      return FeedbackMessage.good.text;
     }
 
-    if (bbox.top > targetRect.bottom) return 'Too low — raise it a bit.';
-    if (bbox.bottom < targetRect.top) return 'Too high — lower it a bit.';
-    if (bbox.left > targetRect.right) return 'Move left slightly.';
-    if (bbox.right < targetRect.left) return 'Move right slightly.';
-    return 'Fit ID card in the box';
+    // If position is good but checks failed, give priority to check failures
+    if (isCompletelyInside && !allChecksPassed) {
+      developer.log(
+        '  Position good but checks failed, returning default message',
+      );
+      return FeedbackMessage.default_.text;
+    }
+
+    // Provide specific directional feedback based on where the bbox is relative to target
+    String result;
+
+    // Check vertical position first (priority)
+    if (bbox.bottom < targetRect.top) {
+      // Bbox is above target area
+      result = FeedbackMessage.tooHigh.text;
+    } else if (bbox.top > targetRect.bottom) {
+      // Bbox is below target area
+      result = FeedbackMessage.tooLow.text;
+    }
+    // Check horizontal position
+    else if (bbox.right < targetRect.left) {
+      // Bbox is to the left of target area
+      result = FeedbackMessage.moveRight.text;
+    } else if (bbox.left > targetRect.right) {
+      // Bbox is to the right of target area
+      result = FeedbackMessage.moveLeft.text;
+    }
+    // Partial overlap cases - give most relevant direction
+    else if (bbox.left < targetRect.left) {
+      // Bbox extends too far left
+      result = FeedbackMessage.moveRight.text;
+    } else if (bbox.right > targetRect.right) {
+      // Bbox extends too far right
+      result = FeedbackMessage.moveLeft.text;
+    } else if (bbox.top < targetRect.top) {
+      // Bbox extends too far up
+      result = FeedbackMessage.tooLow.text;
+    } else if (bbox.bottom > targetRect.bottom) {
+      // Bbox extends too far down
+      result = FeedbackMessage.tooHigh.text;
+    } else {
+      // Fallback case
+      result = FeedbackMessage.default_.text;
+    }
+
+    developer.log('  Result: $result');
+    return result;
+  }
+
+  /// Check if all detection checks have passed
+  bool _areAllDetectionChecksPassed() {
+    // Check the most important quality indicators
+    bool darknessOk =
+        _lastChecks.darkness == DetectionCheckResult.pass ||
+        _lastChecks.darkness == DetectionCheckResult.none;
+    bool brightnessOk =
+        _lastChecks.brightness == DetectionCheckResult.pass ||
+        _lastChecks.brightness == DetectionCheckResult.none;
+    bool blurOk =
+        _lastChecks.blur == DetectionCheckResult.pass ||
+        _lastChecks.blur == DetectionCheckResult.none;
+    bool glareOk =
+        _lastChecks.glare == DetectionCheckResult.pass ||
+        _lastChecks.glare == DetectionCheckResult.none;
+
+    developer.log(
+      '  Detection checks: darkness=$darknessOk, brightness=$brightnessOk, blur=$blurOk, glare=$glareOk',
+    );
+
+    return darknessOk && brightnessOk && blurOk && glareOk;
   }
 
   void _autoCapture() async {
@@ -706,14 +902,26 @@ class CameraService {
 
       XFile resultFile = file;
 
-      // If bbox is available, crop the image
+      // If bbox is available, crop the image with 10px padding
       if (_lastBbox != null) {
-        // Convert bbox to [x1, y1, x2, y2]
+        // Add 10px padding to all sides of the bbox
+        const padding = 10.0;
+        final paddedBbox = Rect.fromLTRB(
+          _lastBbox!.left - padding, // Left: -10px
+          _lastBbox!.top - padding, // Top: -10px
+          _lastBbox!.right + padding, // Right: +10px
+          _lastBbox!.bottom + padding, // Bottom: +10px
+        );
+
+        developer.log('Original bbox: $_lastBbox');
+        developer.log('Padded bbox (10px): $paddedBbox');
+
+        // Uses the padded bbox for cropping
         final bboxList = [
-          _lastBbox!.left,
-          _lastBbox!.top,
-          _lastBbox!.right,
-          _lastBbox!.bottom,
+          paddedBbox.left,
+          paddedBbox.top,
+          paddedBbox.right,
+          paddedBbox.bottom,
         ];
         final croppedBytes = await ImageCropper.cropImage(pngBytes, bboxList);
         final croppedPath = await ImageCropper.saveCroppedImage(
@@ -734,7 +942,7 @@ class CameraService {
 
       _emitFeedback(
         DetectionFeedback(
-          message: 'Captured!',
+          message: FeedbackMessage.captured.text,
           checks: _lastChecks,
           connecting: false,
           connected: true,

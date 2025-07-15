@@ -109,6 +109,7 @@ class _KYCCameraCaptureState extends State<KYCCameraCapture>
     _cameraService = CameraService(
       cameraController: _controller!,
       targetRect: _targetRect,
+      screenSize: _screenSize, // Add screen size parameter
       onChecks: (checks) {
         // Detection checks callback - could be used for additional logic
       },
@@ -289,9 +290,9 @@ class _KYCCameraCaptureState extends State<KYCCameraCapture>
         final scaleX = imageWidth / cameraWidth;
         final scaleY = imageHeight / cameraHeight;
 
-        developer.log('Image dimensions: ${imageWidth}x${imageHeight}');
-        developer.log('Camera dimensions: ${cameraWidth}x${cameraHeight}');
-        developer.log('Screen dimensions: ${screenWidth}x${screenHeight}');
+        developer.log('Image dimensions: $imageWidth x $imageHeight');
+        developer.log('Camera dimensions: $cameraWidth x $cameraHeight');
+        developer.log('Screen dimensions: $screenWidth x $screenHeight');
         developer.log('Preview scale: $previewScale');
         developer.log('Scaled preview width: $scaledPreviewWidth');
         developer.log('Crop offset X: $cropOffsetX');
@@ -313,16 +314,26 @@ class _KYCCameraCaptureState extends State<KYCCameraCapture>
           cameraTargetRect.height * scaleY,
         );
 
+        // Add 10px padding to the target area for better cropping
+        const padding = 10.0;
+        final paddedImageRect = Rect.fromLTRB(
+          imageTargetRect.left - padding,
+          imageTargetRect.top - padding,
+          imageTargetRect.right + padding,
+          imageTargetRect.bottom + padding,
+        );
+
         developer.log('Original target rect: $_targetRect');
         developer.log('Camera target rect: $cameraTargetRect');
-        developer.log('Final image target rect: $imageTargetRect');
+        developer.log('Image target rect: $imageTargetRect');
+        developer.log('Padded image rect (10px): $paddedImageRect');
 
         // Convert to bbox format for cropping
         final targetBboxList = [
-          imageTargetRect.left,
-          imageTargetRect.top,
-          imageTargetRect.right,
-          imageTargetRect.bottom,
+          paddedImageRect.left,
+          paddedImageRect.top,
+          paddedImageRect.right,
+          paddedImageRect.bottom,
         ];
 
         final croppedBytes = await ImageCropper.cropImage(
@@ -404,7 +415,7 @@ class _KYCCameraCaptureState extends State<KYCCameraCapture>
 
             // Feedback box
             FeedbackBox(
-              feedbackState: _getFeedbackState(),
+              feedbackState: _feedback.feedbackState,
               feedbackText: _feedback.message,
             ),
 
@@ -419,10 +430,6 @@ class _KYCCameraCaptureState extends State<KYCCameraCapture>
         ),
       ),
     );
-  }
-
-  FeedbackState _getFeedbackState() {
-    return _feedback.feedbackState;
   }
 
   Widget _buildConnectingOverlay() {
