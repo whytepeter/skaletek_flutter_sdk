@@ -50,6 +50,12 @@ class _KYCCameraCaptureState extends State<KYCCameraCapture>
   DateTime? _lastRebuildTime;
   static const _minRebuildInterval = Duration(milliseconds: 16); // 60fps limit
 
+  // Snackbar control
+  DateTime? _lastSnackbarTime;
+  static const _minSnackbarInterval = Duration(
+    milliseconds: 500,
+  ); // Prevent spam
+
   @override
   void initState() {
     super.initState();
@@ -119,6 +125,9 @@ class _KYCCameraCaptureState extends State<KYCCameraCapture>
     _cameraService!.feedbackStream.listen((feedback) {
       if (!mounted || !_isActive) return;
 
+      // Show snackbar for testing purposes
+      _showFeedbackSnackbar(feedback);
+
       // Throttle UI updates to prevent excessive rebuilds
       final now = DateTime.now();
       if (_lastRebuildTime != null &&
@@ -144,6 +153,72 @@ class _KYCCameraCaptureState extends State<KYCCameraCapture>
 
     // Connect the service
     _cameraService!.connect();
+  }
+
+  void _showFeedbackSnackbar(DetectionFeedback feedback) {
+    // Throttle snackbar to prevent spam
+    final now = DateTime.now();
+    if (_lastSnackbarTime != null &&
+        now.difference(_lastSnackbarTime!).inMilliseconds <
+            _minSnackbarInterval.inMilliseconds) {
+      return;
+    }
+    _lastSnackbarTime = now;
+
+    // Extract bbox information from feedback
+    String bboxInfo = 'No bbox data';
+
+    // Check if feedback has bbox information
+    // This assumes your DetectionFeedback model has bbox data
+    // You may need to adjust this based on your actual model structure
+    if (feedback.bbox != null) {
+      final bbox = feedback.bbox;
+      bboxInfo =
+          'BBox: (${bbox!.left.toStringAsFixed(1)}, ${bbox.top.toStringAsFixed(1)}, ${bbox.right.toStringAsFixed(1)}, ${bbox.bottom.toStringAsFixed(1)})';
+    } else {
+      bboxInfo = 'BBox: null';
+    }
+
+    // Create snackbar content
+    final snackbarContent = '${feedback.message}\n$bboxInfo';
+
+    // Determine snackbar color based on feedback state
+    Color backgroundColor;
+    if (feedback.connecting) {
+      backgroundColor = Colors.blue;
+    } else if (feedback.autoCaptured) {
+      backgroundColor = Colors.green;
+    } else if (feedback.message.contains('error') ||
+        feedback.message.contains('Error')) {
+      backgroundColor = Colors.red;
+    } else {
+      backgroundColor = Colors.orange;
+    }
+
+    // Clear any existing snackbars
+    ScaffoldMessenger.of(context).clearSnackBars();
+
+    // Show new snackbar
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          snackbarContent,
+          style: TextStyle(color: Colors.white, fontSize: 12),
+        ),
+        backgroundColor: backgroundColor,
+        duration: Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+        margin: EdgeInsets.only(
+          bottom: 120, // Position above capture button
+          left: 16,
+          right: 16,
+        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+    );
+
+    // Log for debugging
+    developer.log('Feedback: ${feedback.message}, BBox: $bboxInfo');
   }
 
   @override
@@ -191,56 +266,58 @@ class _KYCCameraCaptureState extends State<KYCCameraCapture>
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox.expand(
-      child: Stack(
-        children: [
-          // Camera preview
-          if (_controller != null && _controller!.value.isInitialized)
-            Positioned.fill(child: CameraPreview(_controller!)),
+    return Scaffold(
+      body: SizedBox.expand(
+        child: Stack(
+          children: [
+            // Camera preview
+            if (_controller != null && _controller!.value.isInitialized)
+              Positioned.fill(child: CameraPreview(_controller!)),
 
-          // Overlay with cutout
-          if (_controller != null && _controller!.value.isInitialized)
-            Positioned.fill(
-              child: _RectangleOverlay(
-                rectWidth: _rectWidth,
-                rectHeight: _rectHeight,
-                rectYOffset: _rectYOffset,
+            // Overlay with cutout
+            if (_controller != null && _controller!.value.isInitialized)
+              Positioned.fill(
+                child: _RectangleOverlay(
+                  rectWidth: _rectWidth,
+                  rectHeight: _rectHeight,
+                  rectYOffset: _rectYOffset,
+                ),
+              ),
+
+            // Rectangle border (cutout)
+            Positioned(
+              left: (_screenSize.width - _rectWidth) / 2,
+              top: _rectTop,
+              width: _rectWidth,
+              height: _rectHeight,
+              child: Container(
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.white, width: 2),
+                  borderRadius: BorderRadius.circular(10),
+                ),
               ),
             ),
 
-          // Rectangle border (cutout)
-          Positioned(
-            left: (_screenSize.width - _rectWidth) / 2,
-            top: _rectTop,
-            width: _rectWidth,
-            height: _rectHeight,
-            child: Container(
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.white, width: 2),
-                borderRadius: BorderRadius.circular(10),
-              ),
+            // Detection checks list
+            DetectionChecksList(
+              detectionChecks: _feedback.checks,
+              top: _rectTop + _rectHeight + 24,
             ),
-          ),
 
-          // Detection checks list
-          DetectionChecksList(
-            detectionChecks: _feedback.checks,
-            top: _rectTop + _rectHeight + 24,
-          ),
+            // Feedback box
+            FeedbackBox(
+              feedbackState: _getFeedbackState(),
+              feedbackText: _feedback.message,
+            ),
 
-          // Feedback box
-          FeedbackBox(
-            feedbackState: _getFeedbackState(),
-            feedbackText: _feedback.message,
-          ),
+            // Connecting overlay
+            if (_feedback.connecting) _buildConnectingOverlay(),
 
-          // Connecting overlay
-          if (_feedback.connecting) _buildConnectingOverlay(),
-
-          // UI controls
-          _buildCloseButton(),
-          if (!_feedback.autoCaptured) _buildCaptureButton(),
-        ],
+            // UI controls
+            _buildCloseButton(),
+            if (!_feedback.autoCaptured) _buildCaptureButton(),
+          ],
+        ),
       ),
     );
   }

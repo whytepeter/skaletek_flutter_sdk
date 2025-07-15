@@ -183,7 +183,7 @@ class CameraService {
       _connected = false;
       _connecting = true;
       _pendingRequest = false;
-      _startDetectionLoop();
+      // _startDetectionLoop(); // <-- Remove this line, detection will start after connection is ready
     } catch (e) {
       developer.log('Error creating WebSocket connection: $e');
       _onWsError(e);
@@ -201,6 +201,7 @@ class CameraService {
       _connected = true;
       _reconnectAttempts = 0;
       developer.log('WebSocket connection established');
+      _startDetectionLoop(); // <-- Start detection only after connection is ready
     }
 
     _pendingRequest = false;
@@ -419,6 +420,14 @@ class CameraService {
 
   Future<Uint8List?> _captureOptimizedImage() async {
     try {
+      // Ensure flash is off and camera is muted before taking picture
+      if (cameraController.value.flashMode != FlashMode.off) {
+        await cameraController.setFlashMode(FlashMode.off);
+      }
+      // There is no direct API to mute the camera shutter sound in Flutter's camera plugin.
+      // On Android, the sound is system-controlled. On iOS, it depends on device mute switch.
+      // We document this here for clarity.
+
       final XFile file = await cameraController.takePicture();
       final bytes = await file.readAsBytes();
 
@@ -613,6 +622,14 @@ class CameraService {
     if (_disposed || !_connected) return;
 
     try {
+      // Ensure flash is off and camera is muted before taking picture
+      if (cameraController.value.flashMode != FlashMode.off) {
+        await cameraController.setFlashMode(FlashMode.off);
+      }
+      // There is no direct API to mute the camera shutter sound in Flutter's camera plugin.
+      // On Android, the sound is system-controlled. On iOS, it depends on device mute switch.
+      // We document this here for clarity.
+
       final XFile file = await cameraController.takePicture();
       _autoCaptureController.add(file);
       _emitFeedback(
