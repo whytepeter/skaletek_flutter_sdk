@@ -7,21 +7,10 @@ import 'detection_checks_list.dart';
 import 'feedback_box.dart';
 import 'camera_service.dart';
 
-enum FeedbackState { info, error, success }
-
 class KYCCameraCapture extends StatefulWidget {
-  final void Function(XFile)? onCapture;
-  final FeedbackState feedbackState;
-  final String feedbackText;
-  final DetectionChecks detectionChecks;
+  final void Function(XFile file, {bool isAutoCapture})? onCapture;
 
-  const KYCCameraCapture({
-    super.key,
-    this.onCapture,
-    this.feedbackState = FeedbackState.info,
-    this.feedbackText = 'Fit image in the box',
-    this.detectionChecks = const DetectionChecks(),
-  });
+  const KYCCameraCapture({super.key, this.onCapture});
 
   @override
   State<KYCCameraCapture> createState() => _KYCCameraCaptureState();
@@ -35,6 +24,7 @@ class _KYCCameraCaptureState extends State<KYCCameraCapture>
     message: 'Initializing...',
     checks: const DetectionChecks(),
     connecting: true,
+    feedbackState: FeedbackState.info,
   );
 
   // Cache layout calculations
@@ -147,7 +137,7 @@ class _KYCCameraCaptureState extends State<KYCCameraCapture>
     // Listen to auto-capture stream
     _cameraService!.autoCaptureStream.listen((file) {
       if (mounted && _isActive) {
-        widget.onCapture?.call(file);
+        widget.onCapture?.call(file, isAutoCapture: true);
       }
     });
 
@@ -257,7 +247,7 @@ class _KYCCameraCaptureState extends State<KYCCameraCapture>
     if (_controller != null && _controller!.value.isInitialized && _isActive) {
       try {
         final file = await _controller!.takePicture();
-        widget.onCapture?.call(file);
+        widget.onCapture?.call(file, isAutoCapture: false);
       } catch (e) {
         developer.log('Error capturing image: $e');
       }
@@ -323,13 +313,7 @@ class _KYCCameraCaptureState extends State<KYCCameraCapture>
   }
 
   FeedbackState _getFeedbackState() {
-    if (_feedback.connecting) return FeedbackState.info;
-    if (_feedback.autoCaptured) return FeedbackState.success;
-    if (_feedback.message.contains('error') ||
-        _feedback.message.contains('Error')) {
-      return FeedbackState.error;
-    }
-    return FeedbackState.info;
+    return _feedback.feedbackState;
   }
 
   Widget _buildConnectingOverlay() {

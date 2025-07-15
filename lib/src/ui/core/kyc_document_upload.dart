@@ -10,6 +10,7 @@ import 'package:skaletek_kyc_flutter/src/ui/layout/content.dart';
 import 'package:skaletek_kyc_flutter/src/ui/shared/button.dart';
 import 'package:skaletek_kyc_flutter/src/ui/shared/file_input.dart';
 import 'package:skaletek_kyc_flutter/src/ui/shared/typography.dart';
+import 'dart:developer' as developer;
 
 /// Document types that require back view for verification
 const Set<String> _documentTypesWithBackView = {
@@ -49,6 +50,12 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
   bool _isUploading = false;
   bool _isFrontScanning = false;
   bool _isBackScanning = false;
+
+  // Add GlobalKeys for FileInput
+  final GlobalKey<FileInputState> _frontFileInputKey =
+      GlobalKey<FileInputState>();
+  final GlobalKey<FileInputState> _backFileInputKey =
+      GlobalKey<FileInputState>();
 
   // Centralized error handler instance
   static final ErrorHandlerService _errorHandler = ErrorHandlerService();
@@ -322,7 +329,7 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
       builder: (context) => SizedBox(
         height: MediaQuery.of(context).size.height,
         child: KYCCameraCapture(
-          onCapture: (file) async {
+          onCapture: (file, {bool isAutoCapture = false}) async {
             final bytes = await file.readAsBytes();
             final imageFile = ImageFile(
               name: file.name,
@@ -336,15 +343,35 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
               Navigator.of(context).pop();
             }
 
-            setState(() {
+            if (isAutoCapture) {
+              // For auto-capture, just set the file directly (no scan/crop)
+              developer.log(
+                'Auto capture completed for ${isFront ? 'front' : 'back'}',
+              );
               if (isFront) {
-                _frontDocument = imageFile;
                 _handleFrontDocumentSelected(imageFile);
               } else {
-                _backDocument = imageFile;
                 _handleBackDocumentSelected(imageFile);
               }
-            });
+            } else {
+              // For manual capture, trigger scan/crop for PASSPORT
+              developer.log(
+                'Manual capture completed for ${isFront ? 'front' : 'back'}',
+              );
+              if (isFront) {
+                _frontFileInputKey.currentState?.setFileAndScan(
+                  imageFile,
+                  widget.userInfo?.documentType,
+                  widget.kycService,
+                );
+              } else {
+                _backFileInputKey.currentState?.setFileAndScan(
+                  imageFile,
+                  widget.userInfo?.documentType,
+                  widget.kycService,
+                );
+              }
+            }
           },
         ),
       ),
@@ -372,6 +399,7 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
           ),
           const SizedBox(height: 12),
           FileInput(
+            key: isFront ? _frontFileInputKey : _backFileInputKey,
             selectedFile: selectedFile,
             onFileSelected: onFileSelected,
             onFileRemoved: onFileRemoved,

@@ -8,6 +8,7 @@
 /// - Debounced feedback updates
 /// - Enhanced error handling and connection management
 /// - Performance monitoring and automatic quality adjustment
+/// - Base64 image encoding to match web implementation
 
 import 'dart:async';
 import 'dart:collection';
@@ -23,8 +24,11 @@ import 'package:web_socket_channel/status.dart' as ws_status;
 
 import '../../../config/app_config.dart';
 import '../../../models/kyc_api_models.dart';
+import '../../../utils/image_cropper.dart';
 
 /// Feedback state for UI overlays
+enum FeedbackState { info, error, success }
+
 class DetectionFeedback {
   final String message;
   final DetectionChecks checks;
@@ -33,6 +37,7 @@ class DetectionFeedback {
   final bool connected;
   final bool autoCaptured;
   final Rect? bbox;
+  final FeedbackState feedbackState;
 
   DetectionFeedback({
     required this.message,
@@ -42,6 +47,7 @@ class DetectionFeedback {
     this.connected = false,
     this.autoCaptured = false,
     this.bbox,
+    this.feedbackState = FeedbackState.info,
   });
 
   @override
@@ -135,7 +141,7 @@ class CameraService {
     required this.cameraController,
     required this.targetRect,
     required this.onChecks,
-    this.steadyDelay = const Duration(milliseconds: 4000),
+    this.steadyDelay = const Duration(milliseconds: 2000), // Changed to 2s
   }) {
     _startPerformanceMonitoring();
   }
@@ -155,6 +161,7 @@ class CameraService {
         connected: false,
         analyzing: false,
         autoCaptured: false,
+        feedbackState: FeedbackState.info,
       ),
     );
     _openSocket();
@@ -183,7 +190,6 @@ class CameraService {
       _connected = false;
       _connecting = true;
       _pendingRequest = false;
-      // _startDetectionLoop(); // <-- Remove this line, detection will start after connection is ready
     } catch (e) {
       developer.log('Error creating WebSocket connection: $e');
       _onWsError(e);
@@ -201,13 +207,13 @@ class CameraService {
       _connected = true;
       _reconnectAttempts = 0;
       developer.log('WebSocket connection established');
-      _startDetectionLoop(); // <-- Start detection only after connection is ready
+      _startDetectionLoop();
     }
 
     _pendingRequest = false;
 
     try {
-      developer.log(message);
+      developer.log('Received message: $message');
 
       // Parse the JSON message (handle double-encoded JSON)
       dynamic jsonData;
@@ -252,6 +258,7 @@ class CameraService {
             connected: true,
             analyzing: false,
             autoCaptured: false,
+            feedbackState: FeedbackState.info,
           ),
         );
         return;
@@ -309,6 +316,7 @@ class CameraService {
           connected: true,
           analyzing: false,
           autoCaptured: false,
+          feedbackState: FeedbackState.error,
         ),
       );
     }
@@ -330,6 +338,7 @@ class CameraService {
         connected: false,
         analyzing: false,
         autoCaptured: false,
+        feedbackState: FeedbackState.info,
       ),
     );
     _reconnectWithBackoff();
@@ -352,6 +361,7 @@ class CameraService {
         connected: false,
         analyzing: false,
         autoCaptured: false,
+        feedbackState: FeedbackState.error,
       ),
     );
     _reconnectWithBackoff();
@@ -391,7 +401,7 @@ class CameraService {
 
       _pendingRequest = true;
 
-      // Only show "Analyzing..." if we're actually connected
+      // We're actually connected
       if (_connected) {
         _emitFeedback(
           DetectionFeedback(
@@ -402,14 +412,16 @@ class CameraService {
             analyzing: true,
             autoCaptured: false,
             bbox: _lastBbox,
+            feedbackState: FeedbackState.info,
           ),
         );
       }
 
       try {
-        final bytes = await _captureOptimizedImage();
-        if (bytes != null && !_disposed) {
-          _channel?.sink.add(bytes);
+        final arrayBuffer = await _captureOptimizedImageAsArrayBuffer();
+        if (arrayBuffer != null && !_disposed) {
+          developer.log('Sending image data: ${arrayBuffer.length} bytes');
+          _channel?.sink.add(arrayBuffer);
         }
       } catch (e) {
         _pendingRequest = false;
@@ -418,30 +430,48 @@ class CameraService {
     });
   }
 
-  Future<Uint8List?> _captureOptimizedImage() async {
+  /// Converts image to ArrayBuffer format to match web implementation
+  Future<Uint8List?> _captureOptimizedImageAsArrayBuffer() async {
     try {
       // Ensure flash is off and camera is muted before taking picture
       if (cameraController.value.flashMode != FlashMode.off) {
         await cameraController.setFlashMode(FlashMode.off);
       }
-      // There is no direct API to mute the camera shutter sound in Flutter's camera plugin.
-      // On Android, the sound is system-controlled. On iOS, it depends on device mute switch.
-      // We document this here for clarity.
 
       final XFile file = await cameraController.takePicture();
       final bytes = await file.readAsBytes();
 
-      // If performance is poor, reduce image quality
-      if (_performanceMetrics.isPerformancePoor &&
-          _currentImageQuality > _minImageQuality) {
-        return await _compressImage(bytes);
-      }
+      // Convert to base64 data URL format (similar to web implementation)
+      String base64Image = base64Encode(bytes);
+      String dataURL = 'data:image/jpeg;base64,$base64Image';
 
-      return bytes;
+      developer.log('Created data URL with length: ${dataURL.length}');
+
+      // Convert data URL to ArrayBuffer (matching web implementation)
+      return _dataURLToArrayBuffer(dataURL);
     } catch (e) {
-      developer.log('Error in _captureOptimizedImage: $e');
+      developer.log('Error in _captureOptimizedImageAsArrayBuffer: $e');
       return null;
     }
+  }
+
+  /// Converts data URL to ArrayBuffer (matches web implementation)
+  Uint8List _dataURLToArrayBuffer(String dataURL) {
+    // Split the data URL at the comma
+    final parts = dataURL.split(',');
+    if (parts.length != 2) {
+      throw Exception('Invalid data URL.');
+    }
+
+    // The second part is the Base64 encoded string
+    final base64String = parts[1];
+
+    // Decode the Base64 string to bytes
+    final bytes = base64Decode(base64String);
+
+    developer.log('Converted to ArrayBuffer: ${bytes.length} bytes');
+
+    return bytes;
   }
 
   Future<Uint8List> _compressImage(Uint8List bytes) async {
@@ -537,9 +567,13 @@ class CameraService {
   void _handleFeedback(Rect? bbox, DetectionChecks checks) {
     if (_disposed) return;
 
+    // Always update _lastChecks
+    _lastChecks = checks;
+
     if (bbox == null) {
       _insideSince = null;
       _steadyTimer?.cancel();
+      _lastBbox = null; // Reset last bbox when bbox is null
       _emitFeedback(
         DetectionFeedback(
           message: 'Fit ID card in the box',
@@ -549,10 +583,13 @@ class CameraService {
           analyzing: false,
           autoCaptured: false,
           bbox: null,
+          feedbackState: FeedbackState.info,
         ),
       );
       return;
     }
+
+    _lastBbox = bbox; // Always update last bbox if not null
 
     final feedback = _bboxFeedback(bbox);
     final isInRightSpot = feedback == 'Right spot! Hold steady';
@@ -577,6 +614,9 @@ class CameraService {
         analyzing: false,
         autoCaptured: false,
         bbox: bbox,
+        feedbackState: isInRightSpot
+            ? FeedbackState.success
+            : FeedbackState.error,
       ),
     );
   }
@@ -597,7 +637,7 @@ class CameraService {
   }
 
   String _bboxFeedback(Rect bbox) {
-    // Use contains check with some tolerance for better UX
+    // Increased tolerance and relaxed inside check
     const tolerance = 20.0;
     final adjustedTargetRect = Rect.fromLTRB(
       targetRect.left - tolerance,
@@ -606,8 +646,19 @@ class CameraService {
       targetRect.bottom + tolerance,
     );
 
-    if (adjustedTargetRect.contains(bbox.topLeft) &&
-        adjustedTargetRect.contains(bbox.bottomRight)) {
+    // Instead of requiring full containment, allow partial overlap with margin
+    final overlapWidth = (bbox.left < adjustedTargetRect.left)
+        ? adjustedTargetRect.left - bbox.left
+        : (bbox.right > adjustedTargetRect.right)
+        ? bbox.right - adjustedTargetRect.right
+        : 0.0;
+    final overlapHeight = (bbox.top < adjustedTargetRect.top)
+        ? adjustedTargetRect.top - bbox.top
+        : (bbox.bottom > adjustedTargetRect.bottom)
+        ? bbox.bottom - adjustedTargetRect.bottom
+        : 0.0;
+    // Allow up to 30px outside on any side
+    if (overlapWidth <= 30.0 && overlapHeight <= 30.0) {
       return 'Right spot! Hold steady';
     }
 
@@ -626,12 +677,30 @@ class CameraService {
       if (cameraController.value.flashMode != FlashMode.off) {
         await cameraController.setFlashMode(FlashMode.off);
       }
-      // There is no direct API to mute the camera shutter sound in Flutter's camera plugin.
-      // On Android, the sound is system-controlled. On iOS, it depends on device mute switch.
-      // We document this here for clarity.
 
       final XFile file = await cameraController.takePicture();
-      _autoCaptureController.add(file);
+      XFile resultFile = file;
+
+      // If bbox is available, crop the image
+      if (_lastBbox != null) {
+        final bytes = await file.readAsBytes();
+        // Convert bbox to [x1, y1, x2, y2]
+        final bboxList = [
+          _lastBbox!.left,
+          _lastBbox!.top,
+          _lastBbox!.right,
+          _lastBbox!.bottom,
+        ];
+        final croppedBytes = await ImageCropper.cropImage(bytes, bboxList);
+        final croppedPath = await ImageCropper.saveCroppedImage(
+          croppedBytes,
+          file.path,
+        );
+        resultFile = XFile(croppedPath);
+      }
+
+      _autoCaptureController.add(resultFile);
+
       _emitFeedback(
         DetectionFeedback(
           message: 'Captured!',
@@ -641,6 +710,7 @@ class CameraService {
           analyzing: false,
           autoCaptured: true,
           bbox: _lastBbox,
+          feedbackState: FeedbackState.success,
         ),
       );
     } catch (e) {

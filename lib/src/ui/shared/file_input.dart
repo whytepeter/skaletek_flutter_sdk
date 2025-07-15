@@ -68,10 +68,10 @@ class FileInput extends StatefulWidget {
   });
 
   @override
-  State<FileInput> createState() => _FileInputState();
+  State<FileInput> createState() => FileInputState();
 }
 
-class _FileInputState extends State<FileInput> {
+class FileInputState extends State<FileInput> {
   ImageFile? _selectedFile;
   String? _errorMessage;
   final ImagePicker _imagePicker = ImagePicker();
@@ -205,6 +205,73 @@ class _FileInputState extends State<FileInput> {
       widget.onShowToast?.call(
         'Document detection failed. Using original image.',
       );
+      setState(() {
+        _isDetecting = false;
+      });
+      widget.onScanningChanged?.call(false);
+    }
+  }
+
+  /// Public method to set file and trigger scan/crop for PASSPORT
+  Future<void> setFileAndScan(
+    ImageFile file,
+    String? documentType,
+    KYCService? kycService,
+  ) async {
+    setState(() {
+      _selectedFile = file;
+      _errorMessage = null;
+      _isDetecting = true;
+    });
+
+    // Call onFileSelected with the original file first
+    widget.onFileSelected?.call(file);
+    widget.onScanningChanged?.call(true);
+
+    // Only perform detection for Passport documents
+    if (documentType?.toUpperCase() == 'PASSPORT' && kycService != null) {
+      try {
+        final fileObj = File(file.path);
+        final bbox = await kycService.detectDocument(fileObj);
+
+        if (bbox != null && bbox.length == 4) {
+          final croppedBytes = await ImageCropper.cropImage(file.bytes!, bbox);
+          final croppedPath = await ImageCropper.saveCroppedImage(
+            croppedBytes,
+            file.path,
+          );
+          final croppedImageFile = ImageFile(
+            name: 'cropped_${file.name}',
+            size: croppedBytes.length,
+            bytes: croppedBytes,
+            path: croppedPath,
+            extension: file.extension,
+          );
+          setState(() {
+            _selectedFile = croppedImageFile;
+            _isDetecting = false;
+          });
+          widget.onFileSelected?.call(croppedImageFile);
+          widget.onScanningChanged?.call(false);
+        } else {
+          widget.onShowToast?.call(
+            'Please provide a valid Document type in the country',
+          );
+          setState(() {
+            _isDetecting = false;
+          });
+          widget.onScanningChanged?.call(false);
+        }
+      } catch (e) {
+        widget.onShowToast?.call(
+          'Document detection failed. Using original image.',
+        );
+        setState(() {
+          _isDetecting = false;
+        });
+        widget.onScanningChanged?.call(false);
+      }
+    } else {
       setState(() {
         _isDetecting = false;
       });
