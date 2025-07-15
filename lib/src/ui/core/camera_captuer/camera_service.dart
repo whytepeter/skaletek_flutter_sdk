@@ -37,6 +37,7 @@ enum FeedbackMessage {
   tooHigh('Too high — lower it a bit.'),
   moveLeft('Move left slightly.'),
   moveRight('Move right slightly.'),
+  goodPositionBadQuality('Good position! Improve lighting and focus'),
   connecting('Connecting…'),
   disconnected('Disconnected. Reconnecting…'),
   connectionError('Connection error. Reconnecting…'),
@@ -78,7 +79,8 @@ class DetectionFeedback {
         other.connecting == connecting &&
         other.connected == connected &&
         other.autoCaptured == autoCaptured &&
-        other.bbox == bbox;
+        other.bbox == bbox &&
+        other.feedbackState == feedbackState;
   }
 
   @override
@@ -90,6 +92,7 @@ class DetectionFeedback {
     connected,
     autoCaptured,
     bbox,
+    feedbackState,
   );
 }
 
@@ -173,6 +176,7 @@ class CameraService {
     if (_disposed) return;
 
     _connecting = true;
+    _connected = false;
     _emitFeedback(
       DetectionFeedback(
         message: FeedbackMessage.connecting.text,
@@ -207,9 +211,29 @@ class CameraService {
         cancelOnError: false,
       );
 
-      _connected = false;
-      _connecting = true;
+      // Set connected state immediately when WebSocket is created
+      _connecting = false;
+      _connected = true;
+      _reconnectAttempts = 0;
       _pendingRequest = false;
+
+      developer.log('WebSocket connection established');
+
+      // Emit connected feedback
+      _emitFeedback(
+        DetectionFeedback(
+          message: FeedbackMessage.default_.text,
+          checks: _lastChecks,
+          connecting: false,
+          connected: true,
+          analyzing: false,
+          autoCaptured: false,
+          feedbackState: FeedbackState.info,
+        ),
+      );
+
+      // Start detection loop
+      _startDetectionLoop();
     } catch (e) {
       developer.log('Error creating WebSocket connection: $e');
       _onWsError(e);
@@ -220,15 +244,6 @@ class CameraService {
     if (_disposed) return;
 
     final processingStart = DateTime.now();
-
-    // First message received means we're connected
-    if (_connecting) {
-      _connecting = false;
-      _connected = true;
-      _reconnectAttempts = 0;
-      developer.log('WebSocket connection established');
-      _startDetectionLoop();
-    }
 
     _pendingRequest = false;
 
@@ -678,6 +693,8 @@ class CameraService {
       return FeedbackState.success;
     } else if (message == FeedbackMessage.default_.text) {
       return FeedbackState.info;
+    } else if (message == FeedbackMessage.goodPositionBadQuality.text) {
+      return FeedbackState.error; // Orange/red to indicate quality issue
     } else if (message == FeedbackMessage.processingError.text ||
         message == FeedbackMessage.connectionError.text) {
       return FeedbackState.error;
@@ -767,9 +784,7 @@ class CameraService {
   void _emitFeedback(DetectionFeedback feedback) {
     if (_disposed) return;
 
-    // Debounce feedback updates to prevent UI flickering
-    if (_lastFeedback == feedback) return;
-
+    // Always emit feedback for debugging - no filtering
     _debounceTimer?.cancel();
     _debounceTimer = Timer(const Duration(milliseconds: 16), () {
       if (!_disposed) {
@@ -780,45 +795,44 @@ class CameraService {
   }
 
   String _bboxFeedback(Rect bbox) {
-    developer.log('Bbox feedback calculation:');
-    developer.log('  bbox: $bbox');
-    developer.log('  targetRect: $targetRect');
+    // Check if bbox is reasonably positioned within target area with forgiveness
+    const forgiveness =
+        30; // 30px forgiveness - bbox can extend outside target area
 
-    // Check if bbox is properly contained within target rect with minimal tolerance
-    const tolerance = 20; // 20px
-    final adjustedTargetRect = Rect.fromLTRB(
-      targetRect.left - tolerance,
-      targetRect.top - tolerance,
-      targetRect.right + tolerance,
-      targetRect.bottom + tolerance,
-    );
+    // Calculate how much the bbox extends outside the target area
+    final overlapLeft = bbox.left < targetRect.left
+        ? targetRect.left - bbox.left
+        : 0.0;
+    final overlapTop = bbox.top < targetRect.top
+        ? targetRect.top - bbox.top
+        : 0.0;
+    final overlapRight = bbox.right > targetRect.right
+        ? bbox.right - targetRect.right
+        : 0.0;
+    final overlapBottom = bbox.bottom > targetRect.bottom
+        ? bbox.bottom - targetRect.bottom
+        : 0.0;
 
-    developer.log('  adjustedTargetRect: $adjustedTargetRect');
+    final maxOverlap = [
+      overlapLeft,
+      overlapTop,
+      overlapRight,
+      overlapBottom,
+    ].reduce((a, b) => a > b ? a : b);
 
-    // Check if bbox is completely within the adjusted target rectangle
-    bool isCompletelyInside =
-        bbox.left >= adjustedTargetRect.left &&
-        bbox.top >= adjustedTargetRect.top &&
-        bbox.right <= adjustedTargetRect.right &&
-        bbox.bottom <= adjustedTargetRect.bottom;
-
-    developer.log('  isCompletelyInside: $isCompletelyInside');
+    // Check if bbox is reasonably positioned (within forgiveness)
+    bool isInGoodPosition = maxOverlap <= forgiveness;
 
     // Check if all detection checks are PASS
     bool allChecksPassed = _areAllDetectionChecksPassed();
-    developer.log('  allChecksPassed: $allChecksPassed');
 
-    if (isCompletelyInside && allChecksPassed) {
-      developer.log('  Result: ${FeedbackMessage.good.text}');
+    if (isInGoodPosition && allChecksPassed) {
       return FeedbackMessage.good.text;
     }
 
-    // If position is good but checks failed, give priority to check failures
-    if (isCompletelyInside && !allChecksPassed) {
-      developer.log(
-        '  Position good but checks failed, returning default message',
-      );
-      return FeedbackMessage.default_.text;
+    // If position is good but checks failed, give specific quality feedback
+    if (isInGoodPosition && !allChecksPassed) {
+      return FeedbackMessage.goodPositionBadQuality.text;
     }
 
     // Provide specific directional feedback based on where the bbox is relative to target
@@ -858,7 +872,6 @@ class CameraService {
       result = FeedbackMessage.default_.text;
     }
 
-    developer.log('  Result: $result');
     return result;
   }
 
@@ -877,10 +890,6 @@ class CameraService {
     bool glareOk =
         _lastChecks.glare == DetectionCheckResult.pass ||
         _lastChecks.glare == DetectionCheckResult.none;
-
-    developer.log(
-      '  Detection checks: darkness=$darknessOk, brightness=$brightnessOk, blur=$blurOk, glare=$glareOk',
-    );
 
     return darknessOk && brightnessOk && blurOk && glareOk;
   }
