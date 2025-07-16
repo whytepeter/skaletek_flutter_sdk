@@ -19,12 +19,10 @@ import 'dart:ui' as ui;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
-import 'package:web_socket_channel/status.dart' as ws_status;
 
-import '../../../config/app_config.dart';
 import '../../../models/kyc_api_models.dart';
 import '../../../utils/image_cropper.dart';
+import '../../../services/websocket_service.dart';
 
 /// Feedback state for UI overlays
 enum FeedbackState { info, error, success }
@@ -132,18 +130,19 @@ class CameraService {
   final double _minImageQuality = 0.5;
   final double _maxImageQuality = 1.0;
 
-  WebSocketChannel? _channel;
-  StreamSubscription? _wsSub;
+  // WebSocket service
+  late final WebSocketService _wsService;
+  StreamSubscription? _wsStatusSub;
+  StreamSubscription? _wsMessageSub;
+  StreamSubscription? _wsErrorSub;
+
   Timer? _detectionTimer;
   Timer? _steadyTimer;
   Timer? _performanceTimer;
   Timer? _debounceTimer;
 
   bool _pendingRequest = false;
-  bool _connected = false;
-  bool _connecting = false;
   bool _disposed = false;
-  int _reconnectAttempts = 0;
   DateTime? _insideSince;
   DateTime? _lastFrameTime;
 
@@ -166,121 +165,102 @@ class CameraService {
     required this.screenSize, // Add required screen size parameter
     this.steadyDelay = const Duration(milliseconds: 3000), // Changed to 2s
   }) {
+    _wsService = WebSocketService();
+    _initWebSocketListeners();
     _startPerformanceMonitoring();
   }
 
   Stream<DetectionFeedback> get feedbackStream => _feedbackController.stream;
   Stream<XFile> get autoCaptureStream => _autoCaptureController.stream;
 
+  /// Initialize WebSocket event listeners
+  void _initWebSocketListeners() {
+    // Listen to connection status changes
+    _wsStatusSub = _wsService.statusStream.listen((status) {
+      switch (status) {
+        case WebSocketStatus.connecting:
+          _emitFeedback(
+            DetectionFeedback(
+              message: FeedbackMessage.connecting.text,
+              checks: _lastChecks,
+              connecting: true,
+              connected: false,
+              analyzing: false,
+              autoCaptured: false,
+              feedbackState: FeedbackState.info,
+            ),
+          );
+          break;
+        case WebSocketStatus.connected:
+          _pendingRequest = false;
+          _emitFeedback(
+            DetectionFeedback(
+              message: FeedbackMessage.default_.text,
+              checks: _lastChecks,
+              connecting: false,
+              connected: true,
+              analyzing: false,
+              autoCaptured: false,
+              feedbackState: FeedbackState.info,
+            ),
+          );
+          _startDetectionLoop();
+          break;
+        case WebSocketStatus.disconnected:
+          _pendingRequest = false;
+          _detectionTimer?.cancel();
+          _emitFeedback(
+            DetectionFeedback(
+              message: FeedbackMessage.disconnected.text,
+              checks: _lastChecks,
+              connecting: true,
+              connected: false,
+              analyzing: false,
+              autoCaptured: false,
+              feedbackState: FeedbackState.info,
+            ),
+          );
+          break;
+        case WebSocketStatus.error:
+          _pendingRequest = false;
+          _detectionTimer?.cancel();
+          _emitFeedback(
+            DetectionFeedback(
+              message: FeedbackMessage.connectionError.text,
+              checks: _lastChecks,
+              connecting: true,
+              connected: false,
+              analyzing: false,
+              autoCaptured: false,
+              feedbackState: FeedbackState.error,
+            ),
+          );
+          break;
+      }
+    });
+
+    // Listen to WebSocket messages
+    _wsMessageSub = _wsService.messageStream.listen(_onWsMessage);
+
+    // Listen to WebSocket errors
+    _wsErrorSub = _wsService.errorStream.listen((error) {
+      developer.log('WebSocket error: $error');
+    });
+  }
+
   void connect() {
     if (_disposed) return;
-
-    _connecting = true;
-    _connected = false;
-    _emitFeedback(
-      DetectionFeedback(
-        message: FeedbackMessage.connecting.text,
-        checks: _lastChecks,
-        connecting: true,
-        connected: false,
-        analyzing: false,
-        autoCaptured: false,
-        feedbackState: FeedbackState.info,
-      ),
-    );
-    _openSocket();
+    _wsService.connect();
   }
 
-  void _openSocket() {
-    if (_disposed) return;
-
-    developer.log(
-      'Attempting to connect to WebSocket: ${AppConfig.mlSocketUrl}',
-    );
-
-    try {
-      _channel = WebSocketChannel.connect(
-        Uri.parse(AppConfig.mlSocketUrl),
-        protocols: ['binary'], // Optimize for binary data
-      );
-
-      _wsSub = _channel!.stream.listen(
-        _onWsMessage,
-        onDone: _onWsDone,
-        onError: _onWsError,
-        cancelOnError: false,
-      );
-
-      // Set connected state immediately when WebSocket is created
-      _connecting = false;
-      _connected = true;
-      _reconnectAttempts = 0;
-      _pendingRequest = false;
-
-      developer.log('WebSocket connection established');
-
-      // Emit connected feedback
-      _emitFeedback(
-        DetectionFeedback(
-          message: FeedbackMessage.default_.text,
-          checks: _lastChecks,
-          connecting: false,
-          connected: true,
-          analyzing: false,
-          autoCaptured: false,
-          feedbackState: FeedbackState.info,
-        ),
-      );
-
-      // Start detection loop
-      _startDetectionLoop();
-    } catch (e) {
-      developer.log('Error creating WebSocket connection: $e');
-      _onWsError(e);
-    }
-  }
-
-  void _onWsMessage(dynamic message) {
+  void _onWsMessage(Map<String, dynamic> data) {
     if (_disposed) return;
 
     final processingStart = DateTime.now();
-
     _pendingRequest = false;
 
     try {
-      developer.log('Received message: $message');
-
-      // Parse the JSON message (handle double-encoded JSON)
-      dynamic jsonData;
-      if (message is String) {
-        jsonData = jsonDecode(message);
-      } else if (message is List<int> || message is Uint8List) {
-        jsonData = jsonDecode(utf8.decode(message));
-      } else {
-        developer.log('Unexpected message type: ${message.runtimeType}');
-        return;
-      }
-
-      // Handle double-encoded JSON (JSON string within JSON)
-      if (jsonData is String) {
-        try {
-          jsonData = jsonDecode(jsonData);
-        } catch (e) {
-          developer.log('Error parsing double-encoded JSON: $e');
-          return;
-        }
-      }
-
-      // Ensure we have a valid Map
-      if (jsonData is! Map<String, dynamic>) {
-        developer.log(
-          'Invalid JSON structure: expected Map<String, dynamic>, got ${jsonData.runtimeType}',
-        );
-        developer.log('Raw data: $jsonData');
-        return;
-      }
-
-      final data = jsonData as Map<String, dynamic>;
+      developer.log('Received message: $data');
 
       // Handle error responses from the server
       if (data['success'] == false) {
@@ -347,7 +327,7 @@ class CameraService {
     } catch (e, stackTrace) {
       developer.log('Error processing WebSocket message: $e');
       developer.log('Stack trace: $stackTrace');
-      developer.log('Message content: $message');
+      developer.log('Message content: $data');
 
       // Emit error feedback to user
       _emitFeedback(
@@ -364,73 +344,10 @@ class CameraService {
     }
   }
 
-  void _onWsDone() {
-    if (_disposed) return;
-
-    _connected = false;
-    _connecting = false;
-    _pendingRequest = false;
-    _detectionTimer?.cancel();
-
-    _emitFeedback(
-      DetectionFeedback(
-        message: FeedbackMessage.disconnected.text,
-        checks: _lastChecks,
-        connecting: true,
-        connected: false,
-        analyzing: false,
-        autoCaptured: false,
-        feedbackState: FeedbackState.info,
-      ),
-    );
-    _reconnectWithBackoff();
-  }
-
-  void _onWsError(error) {
-    if (_disposed) return;
-
-    _connected = false;
-    _connecting = false;
-    _pendingRequest = false;
-    _detectionTimer?.cancel();
-
-    developer.log('WebSocket error occurred: $error');
-    _emitFeedback(
-      DetectionFeedback(
-        message: FeedbackMessage.connectionError.text,
-        checks: _lastChecks,
-        connecting: true,
-        connected: false,
-        analyzing: false,
-        autoCaptured: false,
-        feedbackState: FeedbackState.error,
-      ),
-    );
-    _reconnectWithBackoff();
-  }
-
-  void _reconnectWithBackoff() {
-    if (_disposed) return;
-
-    _reconnectAttempts++;
-    final delay = Duration(
-      milliseconds: (500 * (1 << (_reconnectAttempts.clamp(0, 5)))).clamp(
-        500,
-        30000,
-      ),
-    );
-
-    Timer(delay, () {
-      if (!_disposed && !_connected && !_connecting) {
-        _openSocket();
-      }
-    });
-  }
-
   void _startDetectionLoop() {
     _detectionTimer?.cancel();
     _detectionTimer = Timer.periodic(_currentDetectionInterval, (_) async {
-      if (_disposed || (!_connected && !_connecting) || _pendingRequest) return;
+      if (_disposed || !_wsService.isConnected || _pendingRequest) return;
 
       // Frame rate limiting
       final now = DateTime.now();
@@ -447,7 +364,7 @@ class CameraService {
         final arrayBuffer = await _captureOptimizedImageAsArrayBuffer();
         if (arrayBuffer != null && !_disposed) {
           developer.log('Sending image data: ${arrayBuffer.length} bytes');
-          _channel?.sink.add(arrayBuffer);
+          _wsService.send(arrayBuffer);
         }
       } catch (e) {
         _pendingRequest = false;
@@ -468,7 +385,7 @@ class CameraService {
       final bytes = await file.readAsBytes();
 
       // Convert JPEG to PNG for consistent format
-      final pngBytes = await _convertToPng(bytes);
+      final pngBytes = await ImageCropper.convertToPng(bytes);
 
       // Convert to base64 data URL format (similar to web implementation)
       String base64Image = base64Encode(pngBytes);
@@ -501,22 +418,6 @@ class CameraService {
     developer.log('Converted to ArrayBuffer: ${bytes.length} bytes');
 
     return bytes;
-  }
-
-  /// Converts any image format to PNG
-  Future<Uint8List> _convertToPng(Uint8List bytes) async {
-    try {
-      final codec = await ui.instantiateImageCodec(bytes);
-      final frame = await codec.getNextFrame();
-      final image = frame.image;
-
-      // Convert to PNG format with quality optimization
-      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-      return byteData!.buffer.asUint8List();
-    } catch (e) {
-      developer.log('Error converting to PNG: $e');
-      return bytes; // Return original if conversion fails
-    }
   }
 
   Future<Uint8List> _compressImage(Uint8List bytes) async {
@@ -669,8 +570,8 @@ class CameraService {
       DetectionFeedback(
         message: feedback,
         checks: checks,
-        connecting: false,
-        connected: true,
+        connecting: _wsService.isConnecting,
+        connected: _wsService.isConnected,
         analyzing: false,
         autoCaptured: false,
         bbox: bbox,
@@ -895,7 +796,7 @@ class CameraService {
   }
 
   void _autoCapture() async {
-    if (_disposed || !_connected) return;
+    if (_disposed) return;
 
     try {
       // Ensure flash is off and camera is muted before taking picture
@@ -907,7 +808,7 @@ class CameraService {
       final originalBytes = await file.readAsBytes();
 
       // Convert to PNG format
-      final pngBytes = await _convertToPng(originalBytes);
+      final pngBytes = await ImageCropper.convertToPng(originalBytes);
 
       XFile resultFile = file;
 
@@ -970,17 +871,17 @@ class CameraService {
     _detectionTimer?.cancel();
     _steadyTimer?.cancel();
     _debounceTimer?.cancel();
-    _wsSub?.cancel();
-    _channel?.sink.close(ws_status.goingAway);
-    _connected = false;
-    _connecting = false;
-    _pendingRequest = false;
+    _wsService.disconnect();
   }
 
   void dispose() {
     _disposed = true;
     _performanceTimer?.cancel();
+    _wsStatusSub?.cancel();
+    _wsMessageSub?.cancel();
+    _wsErrorSub?.cancel();
     disconnect();
+    _wsService.dispose();
     _feedbackController.close();
     _autoCaptureController.close();
     _imageBufferPool.clear();

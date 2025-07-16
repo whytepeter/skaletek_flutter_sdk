@@ -1,5 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
+import 'dart:developer' as developer;
 import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:image/image.dart' as img;
 
@@ -113,6 +115,30 @@ class ImageCropper {
       return tempFile.path;
     } catch (e) {
       throw Exception('Failed to save cropped image: $e');
+    }
+  }
+
+  /// Converts any image format to PNG for consistent processing
+  ///
+  /// This method ensures all image processing, server communication, cropping,
+  /// and final output use PNG format consistently throughout the KYC workflow.
+  /// Camera captures in JPEG for efficiency, but all subsequent operations
+  /// require PNG format for optimal quality and compatibility.
+  ///
+  /// [bytes] - The original image bytes in any format
+  /// Returns PNG-formatted image bytes
+  static Future<Uint8List> convertToPng(Uint8List bytes) async {
+    try {
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      final image = frame.image;
+
+      // Convert to PNG format for consistent processing
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      return byteData!.buffer.asUint8List();
+    } catch (e) {
+      developer.log('ImageCropper: Error converting to PNG: $e');
+      return bytes; // Return original if conversion fails
     }
   }
 }

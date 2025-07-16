@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:skaletek_kyc_flutter/src/models/kyc_api_models.dart';
 import 'package:skaletek_kyc_flutter/src/ui/shared/app_color.dart';
 import 'dart:developer' as developer;
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'detection_checks_list.dart';
 import 'feedback_box.dart';
@@ -259,7 +258,7 @@ class _KYCCameraCaptureState extends State<KYCCameraCapture>
         final originalBytes = await file.readAsBytes();
 
         // Convert to PNG format
-        final pngBytes = await _convertToPng(originalBytes);
+        final pngBytes = await ImageCropper.convertToPng(originalBytes);
 
         // Get actual image dimensions
         final codec = await ui.instantiateImageCodec(pngBytes);
@@ -354,22 +353,6 @@ class _KYCCameraCaptureState extends State<KYCCameraCapture>
       } catch (e) {
         developer.log('Error capturing image: $e');
       }
-    }
-  }
-
-  /// Converts any image format to PNG
-  Future<Uint8List> _convertToPng(Uint8List bytes) async {
-    try {
-      final codec = await ui.instantiateImageCodec(bytes);
-      final frame = await codec.getNextFrame();
-      final image = frame.image;
-
-      // Convert to PNG format
-      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-      return byteData!.buffer.asUint8List();
-    } catch (e) {
-      developer.log('Error converting to PNG: $e');
-      return bytes; // Return original if conversion fails
     }
   }
 
