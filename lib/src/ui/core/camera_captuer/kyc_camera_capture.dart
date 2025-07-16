@@ -287,7 +287,9 @@ class _KYCCameraCaptureState extends State<KYCCameraCapture>
   /// - Positioned above capture button for optimal UX
   /// - Color-coded background based on feedback type
   /// - Automatic clearing of previous snackbars
+  /// TODO: remove this function before publishing
   void _showFeedbackSnackbar(DetectionFeedback feedback) {
+    return;
     // Throttle snackbar to prevent spam
     final now = DateTime.now();
     if (_lastSnackbarTime != null &&

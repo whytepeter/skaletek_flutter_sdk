@@ -26,7 +26,7 @@ class _HomeScreenState extends State<HomeScreen> {
       issuingCountry: "USA",
     );
     final customization = KYCCustomization(
-      docSrc: DocumentSource.live.value,
+      docSrc: DocumentSource.file.value,
       logoUrl: null,
       partnerName: "YouTube",
       primaryColor: null,

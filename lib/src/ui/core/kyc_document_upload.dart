@@ -1,3 +1,29 @@
+/*
+/// Handles document collection for identity verification with support for both
+/// file upload and live camera capture with ML-powered scanning.
+///
+/// Features:
+/// - Multi-modal input (file upload or live camera)
+/// - Document type-aware front/back requirements
+/// - Real-time ML scanning and validation
+/// - State persistence across sessions
+/// - Automatic error recovery with session refresh
+/// - Secure upload via presigned URLs
+///
+/// Supports two modes:
+/// - LIVE: Real-time camera capture with ML detection
+/// - FILE: Traditional file selection from device
+///
+/// Usage:
+/// ```dart
+/// KYCDocumentUpload(
+///   kycService: kycServiceInstance,
+///   userInfo: userInformation,
+///   customization: KYCCustomization(docSrc: 'LIVE'),
+///   onNext: () => navigateToNextStep(),
+/// )
+/// ```
+*/
 import 'dart:io';
 import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:flutter/material.dart';
@@ -13,18 +39,17 @@ import 'package:skaletek_kyc_flutter/src/ui/shared/file_input.dart';
 import 'package:skaletek_kyc_flutter/src/ui/shared/typography.dart';
 import 'dart:developer' as developer;
 
-/// Document types that require back view for verification
+/// Document types that require both front and back sides for verification
 const Set<String> _documentTypesWithBackView = {
   'NATIONAL_ID',
   'RESIDENCE_PERMIT',
   'DRIVER_LICENCE',
 };
 
-/// A widget that handles document upload functionality for KYC verification.
+/// KYC document upload widget with ML-powered scanning
 ///
-/// This widget manages the upload of front and back document views,
-/// handles presigned URL management, and provides a user-friendly interface
-/// for document selection and upload.
+/// Manages document collection workflow with support for file upload and live camera capture.
+/// Handles state persistence, error recovery, and provides document type-aware validation.
 class KYCDocumentUpload extends StatefulWidget {
   const KYCDocumentUpload({
     super.key,
@@ -34,34 +59,61 @@ class KYCDocumentUpload extends StatefulWidget {
     required this.customization,
   });
 
+  /// Callback invoked when upload completes successfully
   final VoidCallback? onNext;
+
+  /// KYC service for upload functionality and state management
   final KYCService kycService;
+
+  /// User context including document type for validation requirements
   final KYCUserInfo? userInfo;
+
+  /// Configuration defining capture mode (LIVE/FILE) and UI settings
   final KYCCustomization customization;
 
   @override
   State<KYCDocumentUpload> createState() => _KYCDocumentUploadState();
 }
 
+/// State management for document upload widget
+///
+/// Manages document selection, upload progress, ML scanning, WebSocket connections,
+/// and error handling with state persistence across app lifecycle.
+
 class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
+  /// Selected front document file with metadata
   ImageFile? _frontDocument;
+
+  /// Selected back document file (required for certain document types)
   ImageFile? _backDocument;
+
+  /// Presigned URL configuration for secure cloud uploads
   PresignedUrl? _presignedUrl;
+
+  /// Loading state for initial setup operations
   bool _isLoading = false;
+
+  /// Upload state for active document operations
   bool _isUploading = false;
+
+  /// Scanning state for front document ML processing
   bool _isFrontScanning = false;
+
+  /// Scanning state for back document ML processing
   bool _isBackScanning = false;
 
-  // Add GlobalKeys for FileInput
+  /// Global key for front document file input
   final GlobalKey<FileInputState> _frontFileInputKey =
       GlobalKey<FileInputState>();
+
+  /// Global key for back document file input
   final GlobalKey<FileInputState> _backFileInputKey =
       GlobalKey<FileInputState>();
 
-  // WebSocket service for ML detection - only initialized for LIVE doc source
+  /// WebSocket service for real-time ML document detection (LIVE mode only)
   WebSocketService? _wsService;
 
-  // Centralized error handler instance
+  /// Centralized error handling service
   static final ErrorHandlerService _errorHandler = ErrorHandlerService();
 
   @override
@@ -71,8 +123,10 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
     _initializeDocumentUpload();
   }
 
-  /// Initialize WebSocket service for ML detection
-  /// Only connects in background when docSrc = LIVE for camera captures
+  /// Initializes WebSocket service for ML document detection
+  ///
+  /// Creates and connects WebSocket service for LIVE mode only. The connection
+  /// is shared across camera capture instances for optimal resource usage.
   void _initializeWebSocketService() {
     final docSrc = widget.customization.docSrc.toUpperCase();
 
@@ -100,14 +154,18 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
     super.dispose();
   }
 
-  /// Initialize the document upload process by fetching presigned URLs
-  /// and restoring any previously selected documents
+  /// Initializes document upload workflow
+  ///
+  /// Performs parallel initialization of presigned URLs and state restoration
+  /// to minimize wait time and provide seamless experience.
   Future<void> _initializeDocumentUpload() async {
     await Future.wait([_getPresignedUrls(), _restoreDocumentImages()]);
   }
 
-  /// Centralized error handling method that processes errors and handles
-  /// session refresh when needed
+  /// Handles errors with automatic session refresh when needed
+  ///
+  /// Processes errors and performs session refresh for authentication issues.
+  /// Returns true if error was resolved, false if user intervention required.
   Future<bool> _handleError(
     dynamic error, {
     String context = 'documentUpload',
@@ -228,7 +286,10 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
     ]);
   }
 
-  /// Upload documents to the server
+  /// Uploads documents with validation, error handling, and progress tracking
+  ///
+  /// Validates documents, uploads them in parallel, and handles errors with
+  /// automatic session refresh. Updates UI state and triggers navigation on success.
   Future<void> _uploadDocuments() async {
     if (!_validateDocuments()) return;
 
@@ -260,7 +321,10 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
     }
   }
 
-  /// Validate that required documents are selected
+  /// Validates that required documents are selected based on document type
+  ///
+  /// Front document is always required. Back document is required for certain
+  /// document types (ID cards, permits, licenses). Shows user guidance for missing documents.
   bool _validateDocuments() {
     if (_frontDocument == null) {
       widget.kycService.showSnackbar('Please select a front document');
@@ -354,6 +418,11 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
     return _documentTypesWithBackView.contains(documentType.toUpperCase());
   }
 
+  /// Shows full-screen camera capture with ML-powered document detection
+  ///
+  /// Presents immersive camera interface with real-time ML feedback for optimal
+  /// document positioning. Captured images are automatically processed and routed
+  /// to the appropriate document slot (front/back).
   void _showFullScreenCameraSheet({required bool isFront}) {
     showModalBottomSheet(
       context: context,
@@ -397,7 +466,10 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
     );
   }
 
-  /// Build document view widgets (front or back) with a single parameterized function
+  /// Builds document input widget that adapts based on capture mode
+  ///
+  /// LIVE mode includes camera capture button, FILE mode uses traditional file picker.
+  /// Maintains consistent layout and provides appropriate callbacks for each mode.
   Widget _buildDocumentView({
     required String title,
     required ImageFile? selectedFile,
@@ -484,7 +556,10 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
     );
   }
 
-  /// Handle document selection and removal with a single parameterized function
+  /// Handles document selection and removal with state coordination
+  ///
+  /// Updates both local widget state and global state provider to maintain
+  /// consistency. Resets upload status when documents change.
   void _handleDocumentAction({
     required bool isFront,
     ImageFile? file,
@@ -544,7 +619,10 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
     });
   }
 
-  /// Check if user can proceed to next step
+  /// Checks if user can proceed to next step
+  ///
+  /// Validates that required documents are selected and no operations are in progress.
+  /// Front document is always required, back document only for certain types.
   bool get _canProceed {
     if (_isLoading || _isUploading || _isFrontScanning || _isBackScanning) {
       return false;
@@ -578,7 +656,7 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
     return frontReady && backReady;
   }
 
-  /// Handle the continue button press
+  /// Handles continue button press and initiates upload if ready
   void _handleContinuePressed() {
     if (_canProceed) {
       _uploadDocuments();

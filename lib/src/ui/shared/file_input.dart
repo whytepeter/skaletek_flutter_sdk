@@ -300,7 +300,7 @@ class FileInputState extends State<FileInput> {
     final bool isInteractionDisabled = widget.disabled || _isDetecting;
 
     return Opacity(
-      opacity: isInteractionDisabled ? 0.5 : 1.0,
+      opacity: widget.disabled ? 0.5 : 1.0,
       child: GestureDetector(
         onTap: isInteractionDisabled
             ? null
