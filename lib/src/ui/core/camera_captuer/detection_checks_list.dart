@@ -54,7 +54,7 @@ class _DetectionCheckItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Color bgColor = Colors.white.withOpacity(0.85);
+    Color bgColor = Colors.white.withValues(alpha: 0.85);
     Color textColor = const Color(0xFF222B45);
     Widget icon;
     switch (result) {

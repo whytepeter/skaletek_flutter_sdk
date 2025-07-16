@@ -1,15 +1,82 @@
-/// CameraService
+/// Camera Service for Real-Time Document Detection
 ///
-/// Handles real-time document detection for KYC using a WebSocket ML backend.
+/// A comprehensive service that handles real-time document detection and capture
+/// for KYC (Know Your Customer) verification processes. Integrates with WebSocket-based
+/// machine learning backends to provide live feedback on document positioning,
+/// quality, and automatic capture capabilities.
 ///
-/// Optimizations:
-/// - Frame rate limiting and adaptive quality
-/// - Memory pooling for image processing
-/// - Debounced feedback updates
-/// - Enhanced error handling and connection management
-/// - Performance monitoring and automatic quality adjustment
-/// - PNG image encoding for consistent format
-
+/// ## Core Features
+/// - **Real-time Detection**: Continuous analysis of camera frames for document presence
+/// - **WebSocket Integration**: Seamless communication with ML backend services
+/// - **Adaptive Performance**: Dynamic quality and interval adjustments based on network conditions
+/// - **Automatic Capture**: Intelligent triggering when document meets quality criteria
+/// - **Image Processing**: Efficient conversion, cropping, and optimization of camera images
+/// - **Coordinate Transformation**: Accurate mapping between camera, screen, and image coordinates
+/// - **Memory Management**: Optimized image processing with minimal memory footprint
+///
+/// ## Architecture Overview
+/// ```
+/// CameraController -> CameraService -> WebSocket Backend
+///       |                 |                    |
+///   Image Stream    Image Processing    ML Detection
+///       |                 |                    |
+///   Live Frames      PNG Conversion      Quality Analysis
+///       |                 |                    |
+///   Performance      Coordinate Transform   Feedback
+/// ```
+///
+/// ## Performance Optimizations
+/// - **Frame Rate Limiting**: Adaptive detection intervals (50ms-200ms)
+/// - **Image Quality Scaling**: Dynamic compression based on network performance
+/// - **Memory Pooling**: Efficient image processing with reusable buffers
+/// - **Connection Management**: Automatic reconnection and error handling
+/// - **Debounced Updates**: Throttled UI feedback to prevent excessive rebuilds
+///
+/// ## Image Processing Pipeline
+/// 1. **Camera Capture**: Raw camera frames in YUV420/BGRA8888 format
+/// 2. **Format Conversion**: Convert to PNG for consistent processing
+/// 3. **Intelligent Cropping**: Extract document area with 25% vertical padding
+/// 4. **Quality Optimization**: Adaptive compression based on network conditions
+/// 5. **Coordinate Mapping**: Transform detection results back to screen coordinates
+/// 6. **Feedback Generation**: Real-time positioning and quality guidance
+///
+/// ## Detection Quality Checks
+/// - **Brightness**: Optimal lighting conditions
+/// - **Darkness**: Prevents underexposed images
+/// - **Blur**: Ensures sharp, readable documents
+/// - **Glare**: Detects and prevents reflective surfaces
+/// - **Position**: Validates document placement within target area
+/// - **Size**: Confirms appropriate document scale
+///
+/// ## WebSocket Communication Protocol
+/// - **Outbound**: Optimized PNG image data with adaptive quality
+/// - **Inbound**: Detection results with bounding boxes and quality metrics
+/// - **Error Handling**: Automatic reconnection with exponential backoff
+/// - **Performance Tracking**: Network latency monitoring for optimization
+///
+/// ## Usage Example
+/// ```dart
+/// final service = CameraService(
+///   cameraController: controller,
+///   targetRect: documentArea,
+///   screenSize: screenDimensions,
+///   wsService: webSocketService, // Optional
+///   onChecks: (checks) => handleQualityChecks(checks),
+/// );
+///
+/// // Listen to feedback
+/// service.feedbackStream.listen((feedback) {
+///   updateUI(feedback);
+/// });
+///
+/// // Listen to captures
+/// service.captureStream.listen((file) {
+///   processDocument(file);
+/// });
+///
+/// service.connect();
+/// ```
+///
 import 'dart:async';
 import 'dart:typed_data';
 import 'dart:developer' as developer;
@@ -22,62 +89,180 @@ import '../../../models/kyc_api_models.dart';
 import '../../../utils/image_cropper.dart';
 import '../../../services/websocket_service.dart';
 
-// Detection timing constants
+// =============================================================================
+// DETECTION TIMING CONSTANTS
+// =============================================================================
+
+/// Default interval between detection requests - balanced performance/accuracy
 const Duration _kDefaultDetectionInterval = Duration(milliseconds: 100);
+
+/// Minimum detection interval for high-performance scenarios (fast network)
 const Duration _kMinDetectionInterval = Duration(milliseconds: 50);
+
+/// Maximum detection interval for low-performance scenarios (slow network)
 const Duration _kMaxDetectionInterval = Duration(milliseconds: 200);
+
+/// Required steady positioning duration before automatic capture
 const Duration _kSteadyDelay = Duration(milliseconds: 3000);
 
-// Image quality constants
+// =============================================================================
+// IMAGE QUALITY CONSTANTS
+// =============================================================================
+
+/// Default PNG compression quality (0.0-1.0) - good balance of size/quality
 const double _kDefaultImageQuality = 0.8;
+
+/// Minimum quality for poor network conditions - maintains basic readability
 const double _kMinImageQuality = 0.3;
+
+/// Maximum quality for optimal network conditions - best image fidelity
 const double _kMaxImageQuality = 0.95;
+
+/// Default image scaling factor - full resolution
 const double _kDefaultImageScale = 1.0;
+
+/// Minimum scaling factor for poor network conditions - 40% of original size
 const double _kMinImageScale = 0.4;
 
-// Performance monitoring constants
+// =============================================================================
+// PERFORMANCE MONITORING CONSTANTS
+// =============================================================================
+
+/// Maximum number of performance samples to maintain for averaging
 const int _kMaxPerformanceSamples = 10;
-const double _kPoorPerformanceThreshold = 200.0; // milliseconds
-const double _kGoodPerformanceThreshold = 100.0; // milliseconds
-const double _kSlowNetworkThreshold = 800.0; // milliseconds
-const double _kFastNetworkThreshold = 300.0; // milliseconds
 
-// Feedback and detection constants
+/// Processing time threshold (ms) above which performance is considered poor
+const double _kPoorPerformanceThreshold = 200.0;
+
+/// Processing time threshold (ms) below which performance is considered good
+const double _kGoodPerformanceThreshold = 100.0;
+
+/// Network response time threshold (ms) above which network is considered slow
+const double _kSlowNetworkThreshold = 800.0;
+
+/// Network response time threshold (ms) below which network is considered fast
+const double _kFastNetworkThreshold = 300.0;
+
+// =============================================================================
+// DETECTION AND CROPPING CONSTANTS
+// =============================================================================
+
+/// Position tolerance (pixels) for center alignment validation
 const double _kPositionTolerance = 40.0;
-const double _kCropPadding = 10.0; // pixels
-const double _kDetectionCropPadding = 0.25; // 25% vertical padding
 
-/// Feedback state for UI overlays
-enum FeedbackState { info, error, success }
+/// Padding (pixels) added around target area for manual capture cropping
+const double _kCropPadding = 10.0;
 
-/// Feedback message types for better organization
+/// Vertical padding ratio (25%) for detection area cropping
+const double _kDetectionCropPadding = 0.25;
+
+/// Visual feedback states for UI overlay styling and user guidance
+enum FeedbackState {
+  /// Informational state - neutral blue/gray colors for general guidance
+  info,
+
+  /// Error state - red/orange colors for problems requiring user action
+  error,
+
+  /// Success state - green colors for optimal positioning/quality
+  success,
+}
+
+/// Predefined feedback messages for consistent user guidance
+///
+/// Provides standardized messages for different detection states and user actions.
+/// Each message is designed to give clear, actionable guidance to help users
+/// position their document correctly and understand system status.
+///
+/// ## Message Categories
+/// - **Positioning**: Directional guidance for document placement
+/// - **Quality**: Feedback about image conditions (lighting, focus, etc.)
+/// - **Connection**: System status and connectivity information
+/// - **Capture**: Confirmation and completion messages
 enum FeedbackMessage {
+  /// Default message when no document is detected or positioning is needed
   default_('Fit ID card in the box'),
+
+  /// Success message when document is optimally positioned and capture is imminent
   good('Right spot! Hold steady'),
+
+  /// Directional guidance - document appears too low in frame
   tooLow('Too low — raise it a bit.'),
+
+  /// Directional guidance - document appears too high in frame
   tooHigh('Too high — lower it a bit.'),
+
+  /// Directional guidance - document should be moved to user's left
   moveLeft('Move left slightly.'),
+
+  /// Directional guidance - document should be moved to user's right
   moveRight('Move right slightly.'),
+
+  /// Position is good but image quality needs improvement
   goodPositionBadQuality('Good position! Improve lighting and focus'),
+
+  /// Initial connection establishment in progress
   connecting('Connecting…'),
+
+  /// Connection lost, attempting automatic reconnection
   disconnected('Disconnected. Reconnecting…'),
+
+  /// Connection failed, retry in progress
   connectionError('Connection error. Reconnecting…'),
+
+  /// Server-side processing error occurred
   processingError('Processing error occurred'),
+
+  /// Successful capture confirmation
   captured('Captured!');
 
+  /// Creates a feedback message with the specified text
   const FeedbackMessage(this.text);
+
+  /// The human-readable message text displayed to users
   final String text;
 }
 
+/// Comprehensive feedback data structure for real-time detection updates
+///
+/// Encapsulates all information needed to provide user feedback during document
+/// detection, including positioning guidance, quality checks, system status,
+/// and visual overlay data.
+///
+/// ## Key Components
+/// - **Message**: Human-readable guidance text
+/// - **Quality Checks**: Detailed analysis results (brightness, blur, etc.)
+/// - **System Status**: Connection and processing state indicators
+/// - **Visual Data**: Bounding box coordinates for overlay rendering
+/// - **UI State**: Feedback categorization for styling and behavior
+///
+/// ## Usage
+/// This class is emitted through the feedback stream to update UI components
+/// with real-time detection results and user guidance.
 class DetectionFeedback {
+  /// Human-readable message providing user guidance or system status
   final String message;
+
+  /// Detailed quality analysis results from ML backend
   final DetectionChecks checks;
+
+  /// Whether the system is currently analyzing an image
   final bool analyzing;
+
+  /// Whether the system is attempting to establish connection
   final bool connecting;
+
+  /// Whether the WebSocket connection is active and ready
   final bool connected;
+
+  /// Bounding box coordinates of detected document (screen coordinates)
+  /// Null if no document detected or detection failed
   final Rect? bbox;
+
+  /// Categorized feedback state for UI styling and behavior
   final FeedbackState feedbackState;
 
+  /// Creates a detection feedback instance with the specified parameters
   DetectionFeedback({
     required this.message,
     required this.checks,
@@ -113,11 +298,38 @@ class DetectionFeedback {
   );
 }
 
-/// Performance metrics for adaptive quality and network optimization
+/// Performance monitoring and adaptive optimization system
+///
+/// Tracks processing and network performance metrics to enable dynamic
+/// quality adjustments for optimal user experience across varying device
+/// capabilities and network conditions.
+///
+/// ## Metrics Tracked
+/// - **Processing Time**: Local image processing and conversion duration
+/// - **Network Response Time**: Round-trip time for WebSocket communication
+/// - **Performance Trends**: Rolling averages for trend analysis
+///
+/// ## Adaptive Behaviors
+/// - **Poor Performance**: Reduces image quality and increases detection intervals
+/// - **Good Performance**: Increases quality and decreases intervals for faster response
+/// - **Network Optimization**: Adjusts image compression based on response times
+///
+/// ## Sample Management
+/// Maintains a rolling window of the most recent performance samples to ensure
+/// adaptive behavior responds to current conditions rather than historical averages.
 class _PerformanceMetrics {
+  /// Rolling buffer of processing times (milliseconds) for local operations
   final List<int> _processingTimes = [];
+
+  /// Rolling buffer of network response times (milliseconds) for WebSocket operations
   final List<int> _networkResponseTimes = [];
 
+  /// Records a local processing time measurement
+  ///
+  /// Automatically maintains the rolling window size by removing oldest samples
+  /// when the buffer exceeds [_kMaxPerformanceSamples].
+  ///
+  /// [milliseconds] - Duration of the processing operation
   void addProcessingTime(int milliseconds) {
     _processingTimes.add(milliseconds);
     if (_processingTimes.length > _kMaxPerformanceSamples) {
@@ -125,6 +337,12 @@ class _PerformanceMetrics {
     }
   }
 
+  /// Records a network response time measurement
+  ///
+  /// Tracks round-trip time for WebSocket communication to enable
+  /// adaptive compression and interval adjustments.
+  ///
+  /// [milliseconds] - Duration from request send to response received
   void addNetworkResponseTime(int milliseconds) {
     _networkResponseTimes.add(milliseconds);
     if (_networkResponseTimes.length > _kMaxPerformanceSamples) {
@@ -153,67 +371,184 @@ class _PerformanceMetrics {
   bool get isNetworkFast => averageNetworkResponseTime < _kFastNetworkThreshold;
 }
 
+/// Comprehensive camera service for real-time document detection and capture
+///
+/// Orchestrates the entire document detection pipeline, from camera frame processing
+/// to ML backend communication and user feedback generation. Provides adaptive
+/// performance optimization and intelligent capture triggering.
+///
+/// ## Core Responsibilities
+/// - **Camera Management**: Handles image stream processing and capture operations
+/// - **WebSocket Communication**: Manages ML backend connectivity and data exchange
+/// - **Performance Optimization**: Dynamically adjusts quality based on device/network performance
+/// - **Coordinate Transformation**: Maps between camera, screen, and image coordinate systems
+/// - **User Feedback**: Generates real-time positioning and quality guidance
+/// - **Automatic Capture**: Intelligently triggers capture when conditions are optimal
+///
+/// ## Adaptive Features
+/// - **Detection Intervals**: Adjusts from 50ms-200ms based on performance
+/// - **Image Quality**: Scales compression from 30%-95% based on network conditions
+/// - **Image Scaling**: Reduces resolution by up to 60% for poor connections
+/// - **Connection Management**: Automatic reconnection with error handling
+///
+/// ## Streams
+/// - **Feedback Stream**: Real-time detection feedback and positioning guidance
+/// - **Capture Stream**: Successfully captured and processed document images
+///
+/// ## Lifecycle
+/// 1. **Initialization**: Sets up camera, WebSocket, and performance monitoring
+/// 2. **Connection**: Establishes ML backend connection and starts detection loop
+/// 3. **Detection**: Continuous image processing and quality analysis
+/// 4. **Feedback**: Real-time user guidance and system status updates
+/// 5. **Capture**: Automatic or manual image capture with precise cropping
+/// 6. **Disposal**: Cleanup of resources and connections
 class CameraService {
+  /// Camera controller for device camera access and image operations
   final CameraController cameraController;
-  final Rect targetRect;
-  final void Function(DetectionChecks) onChecks;
-  final Size screenSize; // Add screen size for coordinate transformation
 
-  // Adaptive configuration for network optimization
+  /// Target rectangle defining the document positioning area (screen coordinates)
+  final Rect targetRect;
+
+  /// Callback function for detection quality check updates
+  final void Function(DetectionChecks) onChecks;
+
+  /// Screen dimensions for coordinate transformation calculations
+  final Size screenSize;
+
+  // =============================================================================
+  // ADAPTIVE CONFIGURATION
+  // =============================================================================
+
+  /// Current detection interval - dynamically adjusted based on performance
   Duration _currentDetectionInterval = _kDefaultDetectionInterval;
 
-  // Dynamic image quality and compression settings
+  /// Current image compression quality - adapted to network conditions
   double _currentImageQuality = _kDefaultImageQuality;
+
+  /// Current image scaling factor - reduced for poor performance scenarios
   double _currentImageScale = _kDefaultImageScale;
 
-  // WebSocket service
+  // =============================================================================
+  // WEBSOCKET SERVICE MANAGEMENT
+  // =============================================================================
+
+  /// WebSocket service for ML backend communication
   final WebSocketService _wsService;
-  final bool
-  _wsServiceProvided; // Track if WebSocket service was provided externally
+
+  /// Flag indicating if WebSocket service was provided externally
+  final bool _wsServiceProvided;
+
+  /// Subscription to WebSocket connection status changes
   StreamSubscription? _wsStatusSub;
+
+  /// Subscription to WebSocket message stream
   StreamSubscription? _wsMessageSub;
+
+  /// Subscription to WebSocket error events
   StreamSubscription? _wsErrorSub;
 
+  // =============================================================================
+  // TIMER MANAGEMENT
+  // =============================================================================
+
+  /// Timer for periodic detection requests
   Timer? _detectionTimer;
+
+  /// Timer for steady positioning validation
   Timer? _steadyTimer;
+
+  /// Timer for performance monitoring and adjustment
   Timer? _performanceTimer;
+
+  /// Timer for debouncing UI feedback updates
   Timer? _debounceTimer;
+
+  /// Timer for periodic capture state validation
   Timer? _periodicCaptureTimer;
 
-  bool _pendingRequest = false;
-  bool _disposed = false;
-  DateTime? _lastFrameTime;
-  DateTime? _requestStartTime; // Track network request timing
+  // =============================================================================
+  // STATE MANAGEMENT
+  // =============================================================================
 
+  /// Flag indicating if a detection request is currently pending
+  bool _pendingRequest = false;
+
+  /// Flag indicating if the service has been disposed
+  bool _disposed = false;
+
+  /// Timestamp of the last processed frame for rate limiting
+  DateTime? _lastFrameTime;
+
+  /// Timestamp when the current network request was initiated
+  DateTime? _requestStartTime;
+
+  /// Last received detection quality checks from ML backend
   DetectionChecks _lastChecks = const DetectionChecks();
+
+  /// Last received bounding box coordinates (screen coordinates)
   Rect? _lastBbox;
 
+  /// Performance metrics tracker for adaptive optimization
   final _performanceMetrics = _PerformanceMetrics();
+
+  /// Stream controller for real-time detection feedback
   final _feedbackController = StreamController<DetectionFeedback>.broadcast();
+
+  /// Stream controller for captured document images
   final _captureController = StreamController<XFile>.broadcast();
 
+  // =============================================================================
+  // IMAGE PROCESSING STATE
+  // =============================================================================
+
+  /// Latest camera image for processing (updated by image stream)
   CameraImage? _latestCameraImage;
+
+  /// Flag indicating if camera image stream is active
   bool _isStreaming = false;
+
+  /// Timestamp when steady positioning began
   DateTime? _steadyStartTime;
-  Rect? _lastSteadyBbox;
+
+  /// Flag preventing multiple capture triggers
   bool _captureTriggered = false;
 
+  /// Creates a new camera service instance with the specified configuration
+  ///
+  /// ## Parameters
+  /// - [cameraController]: Active camera controller for image operations
+  /// - [targetRect]: Document positioning area in screen coordinates
+  /// - [onChecks]: Callback for detection quality updates
+  /// - [screenSize]: Screen dimensions for coordinate transformations
+  /// - [wsService]: Optional external WebSocket service (creates own if null)
   CameraService({
     required this.cameraController,
     required this.targetRect,
     required this.onChecks,
-    required this.screenSize, // Add required screen size parameter
-    WebSocketService? wsService, // Accept optional WebSocket service
+    required this.screenSize,
+    WebSocketService? wsService,
   }) : _wsServiceProvided = wsService != null,
        _wsService = wsService ?? WebSocketService() {
     _initWebSocketListeners();
     _startPerformanceMonitoring();
   }
 
+  /// Stream of real-time detection feedback for UI updates
   Stream<DetectionFeedback> get feedbackStream => _feedbackController.stream;
+
+  /// Stream of successfully captured and processed document images
   Stream<XFile> get captureStream => _captureController.stream;
 
-  /// Initialize WebSocket event listeners
+  /// Initializes WebSocket event listeners for ML backend communication
+  ///
+  /// Sets up comprehensive event handling for:
+  /// - **Connection Status**: Manages connecting/connected/disconnected states
+  /// - **Message Processing**: Handles detection results and quality analysis
+  /// - **Error Handling**: Manages connection failures and processing errors
+  /// - **Initial State**: Handles externally provided WebSocket services
+  ///
+  /// The listeners automatically update UI feedback and manage detection loops
+  /// based on connection status changes.
   void _initWebSocketListeners() {
     // Check initial status for externally provided services
     if (_wsServiceProvided) {
@@ -415,10 +750,6 @@ class CameraService {
 
           final croppedBbox = Rect.fromLTRB(left, top, right, bottom);
 
-          developer.log(
-            'Parsed bbox from cropped image: left=$left, top=$top, right=$right, bottom=$bottom',
-          );
-
           // Transform bbox from cropped image coordinates back to screen coordinates
           bbox = _transformBboxFromCroppedToScreen(croppedBbox);
 
@@ -456,6 +787,23 @@ class CameraService {
     }
   }
 
+  /// Starts the main detection loop for continuous document analysis
+  ///
+  /// Initiates periodic image processing and ML backend communication at
+  /// adaptive intervals based on current performance metrics. The loop:
+  ///
+  /// ## Operations
+  /// - **Image Stream**: Starts continuous camera frame capture
+  /// - **Frame Processing**: Converts and crops images for ML analysis
+  /// - **Rate Limiting**: Enforces minimum intervals to prevent overload
+  /// - **Network Communication**: Sends optimized images to ML backend
+  /// - **Performance Tracking**: Monitors timing for adaptive adjustments
+  ///
+  /// ## Adaptive Behavior
+  /// The detection interval automatically adjusts from 50ms-200ms based on:
+  /// - Device processing performance
+  /// - Network response times
+  /// - Overall system load
   void _startDetectionLoop() {
     _detectionTimer?.cancel();
     _startImageStream(); // Start image stream for silent capture
@@ -525,7 +873,28 @@ class CameraService {
     }
   }
 
-  /// Process camera image for detection
+  /// Processes camera images for ML backend analysis with adaptive optimization
+  ///
+  /// Executes the complete image processing pipeline to prepare camera frames
+  /// for document detection analysis. The pipeline includes:
+  ///
+  /// ## Processing Steps
+  /// 1. **Format Conversion**: Convert from camera native format to PNG
+  /// 2. **Intelligent Cropping**: Extract document area with contextual padding
+  /// 3. **Quality Optimization**: Apply adaptive compression based on network performance
+  /// 4. **Size Optimization**: Scale images for optimal performance/quality balance
+  ///
+  /// ## Adaptive Features
+  /// - **Quality Scaling**: 30%-95% compression based on network conditions
+  /// - **Resolution Scaling**: Up to 60% reduction for poor connections
+  /// - **Format Consistency**: Always outputs PNG for reliable ML processing
+  ///
+  /// ## Error Handling
+  /// Returns null if processing fails, allowing the detection loop to continue
+  /// with the next frame rather than breaking the entire pipeline.
+  ///
+  /// [image] - Raw camera image in YUV420 or BGRA8888 format
+  /// Returns optimized PNG bytes ready for ML backend, or null on error
   Future<Uint8List?> _processCameraImage(CameraImage image) async {
     try {
       // Convert CameraImage to PNG bytes
@@ -673,13 +1042,6 @@ class CameraService {
       final scaleX = imageWidth / cameraWidth;
       final scaleY = imageHeight / cameraHeight;
 
-      developer.log(
-        'Detection crop - Image: ${imageWidth}x${imageHeight}, Camera: ${cameraWidth}x${cameraHeight}',
-      );
-      developer.log(
-        'Detection crop - Screen: ${screenWidth}x${screenHeight}, Scale: $previewScale, OffsetX: $cropOffsetX',
-      );
-
       // Create extended target rectangle: full width, target height + padding top/bottom
       final targetHeight = targetRect.height;
       final verticalPadding = targetHeight * _kDetectionCropPadding;
@@ -715,11 +1077,6 @@ class CameraService {
         imageTargetRect.right.clamp(0.0, imageWidth),
         imageTargetRect.bottom.clamp(0.0, imageHeight),
       );
-
-      developer.log('Detection crop - Extended target: $extendedTargetRect');
-      developer.log('Detection crop - Camera target: $cameraTargetRect');
-      developer.log('Detection crop - Image target: $imageTargetRect');
-      developer.log('Detection crop - Final clamped: $finalCropRect');
 
       // Convert to bbox format for cropping (same as manual capture)
       final targetBboxList = [
@@ -963,7 +1320,6 @@ class CameraService {
     if (bbox == null) {
       _lastBbox = null;
       _resetSteadyState();
-      developer.log('No bbox detected');
       _emitFeedback(
         DetectionFeedback(
           message: FeedbackMessage.default_.text,
@@ -988,13 +1344,8 @@ class CameraService {
     final passAllChecks = _areAllDetectionChecksPassed();
 
     if (isInside && passAllChecks) {
-      if (_steadyStartTime == null) {
-        // Start steady period
-        _steadyStartTime = DateTime.now();
-        developer.log(
-          'Steady period started - periodic check will handle capture',
-        );
-      }
+      // Start steady period
+      _steadyStartTime ??= DateTime.now();
     } else {
       _resetSteadyState();
     }
@@ -1079,92 +1430,29 @@ class CameraService {
     });
   }
 
-  String _bboxFeedbackOld(Rect bbox) {
-    // Check if detection quality is good
-    final qualityGood = _areAllDetectionChecksPassed();
-
-    // Calculate bbox center
-    final bboxCenter = bbox.center;
-    final targetCenter = targetRect.center;
-
-    // Calculate offsets
-    final centerOffsetX = bboxCenter.dx - targetCenter.dx;
-    final centerOffsetY = bboxCenter.dy - targetCenter.dy;
-
-    // Calculate how much we need to move horizontally and vertically
-    final horizontalMove = centerOffsetX.abs();
-    final verticalMove = centerOffsetY.abs();
-
-    // 1. Center alignment check (most important)
-    final centered =
-        horizontalMove <= _kPositionTolerance &&
-        verticalMove <= _kPositionTolerance;
-
-    // 2. IMPROVED: Overlap check instead of full containment
-    // Check if there's significant overlap between bbox and target
-    final overlapRect = bbox.intersect(targetRect);
-    final overlapArea = overlapRect.width * overlapRect.height;
-    final bboxArea = bbox.width * bbox.height;
-    final targetArea = targetRect.width * targetRect.height;
-
-    // Require at least 70% of bbox to be inside target, OR
-    // at least 70% of target to be covered by bbox
-    final overlapRatio = overlapArea / bboxArea;
-    final coverageRatio = overlapArea / targetArea;
-    final sufficientOverlap = overlapRatio >= 0.7 || coverageRatio >= 0.7;
-
-    // 3. Size appropriateness check - be more lenient
-    final sizeRatio = bbox.width / targetRect.width;
-    final properSize =
-        sizeRatio >= 0.6 && sizeRatio <= 1.4; // More lenient range
-
-    // Combine all position requirements
-    final positionGood = centered && sufficientOverlap && properSize;
-
-    if (positionGood && qualityGood) {
-      return FeedbackMessage.good.text;
-    }
-
-    if (positionGood && !qualityGood) {
-      return FeedbackMessage.goodPositionBadQuality.text;
-    }
-
-    // Directional feedback - only suggest one direction at a time
-    if (verticalMove > horizontalMove) {
-      // Vertical movement needed
-      if (centerOffsetY > _kPositionTolerance) {
-        return FeedbackMessage.tooLow.text;
-      } else if (centerOffsetY < -_kPositionTolerance) {
-        return FeedbackMessage.tooHigh.text;
-      }
-    }
-
-    if (horizontalMove > verticalMove) {
-      // Horizontal movement needed
-      if (centerOffsetX > _kPositionTolerance) {
-        return FeedbackMessage.moveLeft.text;
-      } else if (centerOffsetX < -_kPositionTolerance) {
-        return FeedbackMessage.moveRight.text;
-      }
-    }
-
-    // If we get here, the position is close but not perfect
-    // Check the most significant deviation
-    if (verticalMove >= horizontalMove) {
-      if (centerOffsetY > 0) {
-        return FeedbackMessage.tooLow.text;
-      } else {
-        return FeedbackMessage.tooHigh.text;
-      }
-    } else {
-      if (centerOffsetX > 0) {
-        return FeedbackMessage.moveLeft.text;
-      } else {
-        return FeedbackMessage.moveRight.text;
-      }
-    }
-  }
-
+  /// Generates intelligent positioning feedback based on document bounding box analysis
+  ///
+  /// Analyzes the detected document's position relative to the target area and
+  /// provides specific, actionable guidance to help users achieve optimal positioning.
+  ///
+  /// ## Analysis Components
+  /// - **Quality Assessment**: Evaluates brightness, blur, glare, and other factors
+  /// - **Position Analysis**: Compares document center with target center
+  /// - **Overlap Calculation**: Determines coverage between document and target areas
+  /// - **Size Validation**: Ensures document is appropriately scaled
+  ///
+  /// ## Feedback Priority
+  /// 1. **Perfect Position + Quality**: Returns success message for capture readiness
+  /// 2. **Good Position + Poor Quality**: Guides quality improvement
+  /// 3. **Poor Position**: Provides directional guidance (up/down/left/right)
+  ///
+  /// ## Positioning Logic
+  /// Uses lenient overlap requirements (50% minimum) for better user experience
+  /// while maintaining reasonable size constraints (40%-200% of target size).
+  /// Prioritizes vertical movement guidance over horizontal when both are needed.
+  ///
+  /// [bbox] - Document bounding box in screen coordinates from ML detection
+  /// Returns human-readable feedback message for UI display
   String _bboxFeedback(Rect bbox) {
     // Check if detection quality is good
     final qualityGood = _areAllDetectionChecksPassed();
@@ -1271,7 +1559,35 @@ class CameraService {
     return darknessOk && brightnessOk && blurOk && glareOk;
   }
 
-  // Manual capture method - captures and crops image to target rectangle
+  /// Performs manual document capture with precise cropping and coordinate transformation
+  ///
+  /// Executes high-quality document capture for final processing, distinct from
+  /// the continuous detection frames. This method ensures optimal image quality
+  /// and precise document extraction for verification purposes.
+  ///
+  /// ## Capture Process
+  /// 1. **Flash Management**: Ensures flash is disabled for consistent lighting
+  /// 2. **High-Quality Capture**: Takes full resolution image for processing
+  /// 3. **Format Conversion**: Converts to PNG for consistent processing
+  /// 4. **Coordinate Transformation**: Maps screen target to image coordinates
+  /// 5. **Precise Cropping**: Extracts exact document area with padding
+  /// 6. **File Generation**: Creates processed XFile for downstream use
+  ///
+  /// ## Coordinate System Handling
+  /// Accurately transforms the target rectangle from screen coordinates through:
+  /// - Camera preview scaling calculations
+  /// - Portrait/landscape orientation adjustments
+  /// - Image dimension scaling factors
+  /// - Crop offset calculations for center alignment
+  ///
+  /// ## Quality Optimization
+  /// - Uses high resolution capture (distinct from detection frames)
+  /// - Applies minimal padding for edge preservation
+  /// - Maintains PNG format for lossless quality
+  /// - Handles coordinate clamping to prevent out-of-bounds cropping
+  ///
+  /// The captured image is emitted through the capture stream for consumption
+  /// by the parent widget or application logic.
   Future<void> capture() async {
     if (_disposed) return;
 
@@ -1408,6 +1724,26 @@ class CameraService {
     }
   }
 
+  /// Disposes of all resources and cleans up the camera service
+  ///
+  /// Performs comprehensive cleanup to prevent memory leaks and ensure
+  /// proper resource management. This method should be called when the
+  /// service is no longer needed.
+  ///
+  /// ## Cleanup Operations
+  /// - **Timer Cancellation**: Stops all periodic operations
+  /// - **Stream Subscriptions**: Cancels WebSocket event listeners
+  /// - **Image Stream**: Stops camera frame processing
+  /// - **WebSocket Management**: Disconnects and optionally disposes service
+  /// - **Stream Controllers**: Closes feedback and capture streams
+  ///
+  /// ## WebSocket Handling
+  /// Only disposes the WebSocket service if it was created internally.
+  /// Externally provided services are left intact for the parent to manage.
+  ///
+  /// ## State Management
+  /// Sets the disposed flag to prevent any further operations and ensures
+  /// all async operations check this flag before proceeding.
   void dispose() {
     _disposed = true;
     _performanceTimer?.cancel();

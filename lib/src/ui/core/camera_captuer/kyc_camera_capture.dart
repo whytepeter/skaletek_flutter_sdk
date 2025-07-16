@@ -1,3 +1,48 @@
+/// KYC Camera Capture Widget
+///
+/// A specialized camera interface for Know Your Customer (KYC) document verification.
+/// This widget provides real-time document detection, positioning feedback, and automatic
+/// capture capabilities using machine learning backend services.
+///
+/// ## Features
+/// - Real-time camera preview with document detection overlay
+/// - WebSocket-based ML backend integration for document analysis
+/// - Visual feedback system with detection quality checks
+/// - Automatic image capture when document is properly positioned
+/// - Manual capture capability with precise cropping to target area
+/// - Adaptive performance optimization based on network conditions
+/// - Comprehensive error handling and connection management
+///
+/// ## Usage
+/// ```dart
+/// KYCCameraCapture(
+///   onCapture: (XFile file) {
+///     // Handle captured and cropped document image
+///   },
+///   wsService: myWebSocketService, // Optional: provide existing service
+/// )
+/// ```
+///
+/// ## Architecture
+/// The widget coordinates several components:
+/// - CameraController: Manages device camera access and image capture
+/// - CameraService: Handles real-time detection and WebSocket communication
+/// - UI Overlays: Provides visual feedback and positioning guides
+/// - Detection System: Real-time quality and position analysis
+///
+/// ## Performance Optimizations
+/// - Frame rate limiting to prevent excessive CPU usage
+/// - UI rebuild throttling to maintain smooth performance
+/// - Snackbar spam prevention for better UX
+/// - Image format optimization (JPEG for capture, PNG for processing)
+/// - Lifecycle-aware connection management
+///
+/// ## Image Processing Flow
+/// 1. Camera captures frames in JPEG format for efficiency
+/// 2. Real-time detection uses cropped regions for faster processing
+/// 3. Final capture converts to PNG and crops to exact target rectangle
+/// 4. Coordinate transformation accounts for camera orientation and scaling
+///
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:skaletek_kyc_flutter/src/models/kyc_api_models.dart';
@@ -8,19 +53,58 @@ import 'feedback_box.dart';
 import 'camera_service.dart';
 import '../../../services/websocket_service.dart';
 
+/// KYC Camera Capture Widget
+///
+/// A stateful widget that provides real-time document detection and capture
+/// functionality for KYC verification processes. Integrates with ML backend
+/// services via WebSocket for live feedback and automatic capture.
+///
+/// ## Parameters
+/// - [onCapture]: Callback function called when an image is successfully captured
+///   and cropped. Receives an [XFile] containing the processed document image.
+/// - [wsService]: Optional WebSocket service instance. If not provided, the widget
+///   will create and manage its own service instance.
+///
+/// ## Behavior
+/// - Automatically initializes camera with high resolution
+/// - Establishes WebSocket connection for real-time detection
+/// - Provides visual overlay for document positioning
+/// - Shows real-time feedback for image quality and positioning
+/// - Triggers automatic capture when document is properly positioned
+/// - Allows manual capture via capture button
+/// - Handles app lifecycle changes for optimal battery usage
 class KYCCameraCapture extends StatefulWidget {
+  /// Callback function invoked when a document image is successfully captured and processed
   final void Function(XFile file)? onCapture;
+
+  /// Optional WebSocket service for ML backend communication
+  /// If null, the widget creates and manages its own service instance
   final WebSocketService? wsService;
+
   const KYCCameraCapture({super.key, this.onCapture, this.wsService});
 
   @override
   State<KYCCameraCapture> createState() => _KYCCameraCaptureState();
 }
 
+/// State class for KYCCameraCapture widget
+///
+/// Manages camera lifecycle, WebSocket connections, and UI state.
+/// Implements performance optimizations including:
+/// - UI rebuild throttling to maintain 60fps
+/// - Snackbar spam prevention
+/// - Lifecycle-aware connection management
+/// - Cached layout calculations for smooth animations
+
 class _KYCCameraCaptureState extends State<KYCCameraCapture>
     with WidgetsBindingObserver, SingleTickerProviderStateMixin {
+  /// Camera controller for device camera access and image capture
   CameraController? _controller;
+
+  /// Service that handles real-time detection and WebSocket communication
   CameraService? _cameraService;
+
+  /// Current detection feedback state displayed to the user
   DetectionFeedback _feedback = DetectionFeedback(
     message: 'Initializing...',
     checks: const DetectionChecks(),
@@ -28,24 +112,41 @@ class _KYCCameraCaptureState extends State<KYCCameraCapture>
     feedbackState: FeedbackState.info,
   );
 
-  // Cache layout calculations
+  // Cache layout calculations for performance optimization
+  /// Screen size cached to avoid repeated MediaQuery calls
   late Size _screenSize;
+
+  /// Width of the document target rectangle (90% of screen width)
   late double _rectWidth;
+
+  /// Height of the document target rectangle (fixed 220px)
   late double _rectHeight;
+
+  /// Vertical offset to position rectangle above center
   late double _rectYOffset;
+
+  /// Top position of the target rectangle on screen
   late double _rectTop;
+
+  /// Complete target rectangle for document positioning
   late Rect _targetRect;
 
-  // Performance optimization
+  // Performance optimization controls
+  /// Flag to track if widget is active and should process updates
   bool _isActive = true;
-  DateTime? _lastRebuildTime;
-  static const _minRebuildInterval = Duration(milliseconds: 16); // 60fps limit
 
-  // Snackbar control
+  /// Timestamp of last UI rebuild to throttle updates
+  DateTime? _lastRebuildTime;
+
+  /// Minimum interval between UI rebuilds to maintain 60fps
+  static const _minRebuildInterval = Duration(milliseconds: 16);
+
+  // Snackbar spam prevention
+  /// Timestamp of last snackbar shown to prevent spam
   DateTime? _lastSnackbarTime;
-  static const _minSnackbarInterval = Duration(
-    milliseconds: 500,
-  ); // Prevent spam
+
+  /// Minimum interval between snackbars to prevent UI spam
+  static const _minSnackbarInterval = Duration(milliseconds: 500);
 
   @override
   void initState() {
@@ -60,6 +161,14 @@ class _KYCCameraCaptureState extends State<KYCCameraCapture>
     _cacheLayoutCalculations();
   }
 
+  /// Caches layout calculations to avoid repeated MediaQuery calls
+  ///
+  /// Calculates and stores:
+  /// - Screen dimensions
+  /// - Target rectangle dimensions and position
+  /// - Document positioning area
+  ///
+  /// Called during [didChangeDependencies] to handle orientation changes
   void _cacheLayoutCalculations() {
     _screenSize = MediaQuery.of(context).size;
     _rectWidth = _screenSize.width * 0.9;
@@ -75,6 +184,13 @@ class _KYCCameraCaptureState extends State<KYCCameraCapture>
     );
   }
 
+  /// Initializes the device camera with optimal settings for document capture
+  ///
+  /// - Selects the first available camera (typically rear camera)
+  /// - Configures high resolution for quality capture
+  /// - Disables audio recording
+  /// - Uses JPEG format for efficient capture and processing
+  /// - Automatically proceeds to initialize camera service on success
   Future<void> _initCamera() async {
     try {
       final cameras = await availableCameras();
@@ -101,6 +217,16 @@ class _KYCCameraCaptureState extends State<KYCCameraCapture>
     }
   }
 
+  /// Initializes the camera service for real-time document detection
+  ///
+  /// Sets up:
+  /// - CameraService with WebSocket communication
+  /// - Real-time feedback stream with UI throttling
+  /// - Automatic capture stream handling
+  /// - WebSocket connection management
+  ///
+  /// The service handles ML backend communication for document detection,
+  /// quality analysis, and automatic capture triggering.
   void _initCameraService() {
     if (_controller == null || !mounted) return;
 
@@ -148,6 +274,19 @@ class _KYCCameraCaptureState extends State<KYCCameraCapture>
     _cameraService!.connect();
   }
 
+  /// Displays detection feedback via snackbar with spam prevention
+  ///
+  /// Shows real-time feedback information including:
+  /// - Detection message and guidance
+  /// - Bounding box coordinates for debugging
+  /// - Connection status indicators
+  /// - Color-coded feedback based on detection state
+  ///
+  /// Features:
+  /// - Throttled to prevent UI spam (500ms minimum interval)
+  /// - Positioned above capture button for optimal UX
+  /// - Color-coded background based on feedback type
+  /// - Automatic clearing of previous snackbars
   void _showFeedbackSnackbar(DetectionFeedback feedback) {
     // Throttle snackbar to prevent spam
     final now = DateTime.now();
@@ -376,10 +515,29 @@ class _KYCCameraCaptureState extends State<KYCCameraCapture>
   }
 }
 
-/// Optimized rectangle overlay painter with caching
+/// Optimized rectangle overlay that creates a darkened background with document cutout
+///
+/// Creates a semi-transparent overlay with a rectangular cutout for document positioning.
+/// The overlay helps users visualize where to place their document for optimal capture.
+///
+/// Features:
+/// - Wrapped in RepaintBoundary for optimal performance
+/// - Cached painting to minimize GPU operations
+/// - Rounded corners matching the target rectangle
+/// - Configurable dimensions and positioning
+///
+/// ## Parameters
+/// - [rectWidth]: Width of the document target area
+/// - [rectHeight]: Height of the document target area
+/// - [rectYOffset]: Vertical offset from center for optimal positioning
 class _RectangleOverlay extends StatelessWidget {
+  /// Width of the document cutout rectangle
   final double rectWidth;
+
+  /// Height of the document cutout rectangle
   final double rectHeight;
+
+  /// Vertical offset from center to position the cutout optimally
   final double rectYOffset;
 
   const _RectangleOverlay({
@@ -405,7 +563,21 @@ class _RectangleOverlay extends StatelessWidget {
   }
 }
 
+/// Custom painter that renders the overlay with document cutout
+///
+/// Efficiently paints a semi-transparent overlay with a rectangular cutout
+/// using path operations to create the desired visual effect.
+///
+/// ## Implementation Details
+/// - Uses path difference operation to create cutout effect
+/// - Applies rounded corners to match target rectangle styling
+/// - Optimized shouldRepaint logic to minimize unnecessary redraws
+/// - Implements proper equality and hashCode for widget optimization
+///
+/// ## Parameters
+/// - [rect]: The rectangular area to cut out from the overlay
 class _RectangleOverlayPainter extends CustomPainter {
+  /// The rectangular area that will be cut out from the overlay
   final Rect rect;
 
   _RectangleOverlayPainter({required this.rect});
