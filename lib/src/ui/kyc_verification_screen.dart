@@ -12,15 +12,9 @@ import 'package:skaletek_kyc_flutter/src/services/kyc_service.dart';
 
 class KYCVerificationScreen extends StatefulWidget {
   final KYCConfig config;
-  final VoidCallback? onNext;
-  final VoidCallback? onBack;
+  final Function(KYCResult)? onExit;
 
-  const KYCVerificationScreen({
-    super.key,
-    required this.config,
-    this.onNext,
-    this.onBack,
-  });
+  const KYCVerificationScreen({super.key, required this.config, this.onExit});
 
   @override
   State<KYCVerificationScreen> createState() => _KYCVerificationScreenState();
@@ -58,7 +52,11 @@ class _KYCVerificationScreenState extends State<KYCVerificationScreen> {
         stateProvider: stateProvider,
         onComplete: (KYCResult result) {
           if (mounted) {
-            Navigator.of(context).pop(result);
+            if (widget.onExit != null) {
+              widget.onExit!(result);
+            } else {
+              Navigator.of(context).pop(result);
+            }
           }
         },
 
@@ -130,9 +128,15 @@ class _KYCVerificationScreenState extends State<KYCVerificationScreen> {
       extendBodyBehindAppBar: true,
       appBar: KYCHeader(
         logoUrl: widget.config.customization.logoUrl,
-        onClose: () => Navigator.of(
-          context,
-        ).pop(KYCResult.failure(status: KYCStatus.cancelled)),
+        onClose: () {
+          if (widget.onExit != null) {
+            widget.onExit!(KYCResult.failure(status: KYCStatus.cancelled));
+          } else {
+            Navigator.of(
+              context,
+            ).pop(KYCResult.failure(status: KYCStatus.cancelled));
+          }
+        },
       ),
       body: KYCBody(
         child: SingleChildScrollView(child: _getCurrentStepWidget()),
