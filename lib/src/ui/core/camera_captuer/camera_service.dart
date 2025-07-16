@@ -11,8 +11,6 @@
 /// - PNG image encoding for consistent format
 
 import 'dart:async';
-import 'dart:collection';
-import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:developer' as developer;
 import 'dart:ui' as ui;
@@ -23,6 +21,31 @@ import 'package:flutter/material.dart';
 import '../../../models/kyc_api_models.dart';
 import '../../../utils/image_cropper.dart';
 import '../../../services/websocket_service.dart';
+
+// Detection timing constants
+const Duration _kDefaultDetectionInterval = Duration(milliseconds: 100);
+const Duration _kMinDetectionInterval = Duration(milliseconds: 50);
+const Duration _kMaxDetectionInterval = Duration(milliseconds: 200);
+const Duration _kSteadyDelay = Duration(milliseconds: 3000);
+
+// Image quality constants
+const double _kDefaultImageQuality = 0.8;
+const double _kMinImageQuality = 0.3;
+const double _kMaxImageQuality = 0.95;
+const double _kDefaultImageScale = 1.0;
+const double _kMinImageScale = 0.4;
+
+// Performance monitoring constants
+const int _kMaxPerformanceSamples = 10;
+const double _kPoorPerformanceThreshold = 200.0; // milliseconds
+const double _kGoodPerformanceThreshold = 100.0; // milliseconds
+const double _kSlowNetworkThreshold = 800.0; // milliseconds
+const double _kFastNetworkThreshold = 300.0; // milliseconds
+
+// Feedback and detection constants
+const double _kPositionTolerance = 40.0;
+const double _kCropPadding = 10.0; // pixels
+const double _kDetectionCropPadding = 0.25; // 25% vertical padding
 
 /// Feedback state for UI overlays
 enum FeedbackState { info, error, success }
@@ -52,7 +75,6 @@ class DetectionFeedback {
   final bool analyzing;
   final bool connecting;
   final bool connected;
-  final bool autoCaptured;
   final Rect? bbox;
   final FeedbackState feedbackState;
 
@@ -62,7 +84,6 @@ class DetectionFeedback {
     this.analyzing = false,
     this.connecting = false,
     this.connected = false,
-    this.autoCaptured = false,
     this.bbox,
     this.feedbackState = FeedbackState.info,
   });
@@ -76,7 +97,6 @@ class DetectionFeedback {
         other.analyzing == analyzing &&
         other.connecting == connecting &&
         other.connected == connected &&
-        other.autoCaptured == autoCaptured &&
         other.bbox == bbox &&
         other.feedbackState == feedbackState;
   }
@@ -88,21 +108,27 @@ class DetectionFeedback {
     analyzing,
     connecting,
     connected,
-    autoCaptured,
     bbox,
     feedbackState,
   );
 }
 
-/// Performance metrics for adaptive quality
+/// Performance metrics for adaptive quality and network optimization
 class _PerformanceMetrics {
   final List<int> _processingTimes = [];
-  final int _maxSamples = 10;
+  final List<int> _networkResponseTimes = [];
 
   void addProcessingTime(int milliseconds) {
     _processingTimes.add(milliseconds);
-    if (_processingTimes.length > _maxSamples) {
+    if (_processingTimes.length > _kMaxPerformanceSamples) {
       _processingTimes.removeAt(0);
+    }
+  }
+
+  void addNetworkResponseTime(int milliseconds) {
+    _networkResponseTimes.add(milliseconds);
+    if (_networkResponseTimes.length > _kMaxPerformanceSamples) {
+      _networkResponseTimes.removeAt(0);
     }
   }
 
@@ -111,27 +137,39 @@ class _PerformanceMetrics {
     return _processingTimes.reduce((a, b) => a + b) / _processingTimes.length;
   }
 
-  bool get isPerformancePoor => averageProcessingTime > 200;
-  bool get isPerformanceGood => averageProcessingTime < 100;
+  double get averageNetworkResponseTime {
+    if (_networkResponseTimes.isEmpty) return 0;
+    return _networkResponseTimes.reduce((a, b) => a + b) /
+        _networkResponseTimes.length;
+  }
+
+  bool get isPerformancePoor =>
+      averageProcessingTime > _kPoorPerformanceThreshold ||
+      averageNetworkResponseTime > 1000;
+  bool get isPerformanceGood =>
+      averageProcessingTime < _kGoodPerformanceThreshold &&
+      averageNetworkResponseTime < 500;
+  bool get isNetworkSlow => averageNetworkResponseTime > _kSlowNetworkThreshold;
+  bool get isNetworkFast => averageNetworkResponseTime < _kFastNetworkThreshold;
 }
 
 class CameraService {
   final CameraController cameraController;
   final Rect targetRect;
-  final Duration steadyDelay;
   final void Function(DetectionChecks) onChecks;
   final Size screenSize; // Add screen size for coordinate transformation
 
-  // Adaptive configuration
-  Duration _currentDetectionInterval = const Duration(milliseconds: 100);
-  final Duration _minDetectionInterval = const Duration(milliseconds: 50);
-  final Duration _maxDetectionInterval = const Duration(milliseconds: 200);
-  double _currentImageQuality = 0.8;
-  final double _minImageQuality = 0.5;
-  final double _maxImageQuality = 1.0;
+  // Adaptive configuration for network optimization
+  Duration _currentDetectionInterval = _kDefaultDetectionInterval;
+
+  // Dynamic image quality and compression settings
+  double _currentImageQuality = _kDefaultImageQuality;
+  double _currentImageScale = _kDefaultImageScale;
 
   // WebSocket service
-  late final WebSocketService _wsService;
+  final WebSocketService _wsService;
+  final bool
+  _wsServiceProvided; // Track if WebSocket service was provided externally
   StreamSubscription? _wsStatusSub;
   StreamSubscription? _wsMessageSub;
   StreamSubscription? _wsErrorSub;
@@ -140,41 +178,48 @@ class CameraService {
   Timer? _steadyTimer;
   Timer? _performanceTimer;
   Timer? _debounceTimer;
+  Timer? _periodicCaptureTimer;
 
   bool _pendingRequest = false;
   bool _disposed = false;
-  DateTime? _insideSince;
   DateTime? _lastFrameTime;
+  DateTime? _requestStartTime; // Track network request timing
 
   DetectionChecks _lastChecks = const DetectionChecks();
-  DetectionFeedback? _lastFeedback;
   Rect? _lastBbox;
 
   final _performanceMetrics = _PerformanceMetrics();
   final _feedbackController = StreamController<DetectionFeedback>.broadcast();
-  final _autoCaptureController = StreamController<XFile>.broadcast();
+  final _captureController = StreamController<XFile>.broadcast();
 
-  // Memory management
-  final Queue<Uint8List> _imageBufferPool = Queue<Uint8List>();
-  static const int _maxPoolSize = 3;
+  CameraImage? _latestCameraImage;
+  bool _isStreaming = false;
+  DateTime? _steadyStartTime;
+  Rect? _lastSteadyBbox;
+  bool _captureTriggered = false;
 
   CameraService({
     required this.cameraController,
     required this.targetRect,
     required this.onChecks,
     required this.screenSize, // Add required screen size parameter
-    this.steadyDelay = const Duration(milliseconds: 3000), // Changed to 2s
-  }) {
-    _wsService = WebSocketService();
+    WebSocketService? wsService, // Accept optional WebSocket service
+  }) : _wsServiceProvided = wsService != null,
+       _wsService = wsService ?? WebSocketService() {
     _initWebSocketListeners();
     _startPerformanceMonitoring();
   }
 
   Stream<DetectionFeedback> get feedbackStream => _feedbackController.stream;
-  Stream<XFile> get autoCaptureStream => _autoCaptureController.stream;
+  Stream<XFile> get captureStream => _captureController.stream;
 
   /// Initialize WebSocket event listeners
   void _initWebSocketListeners() {
+    // Check initial status for externally provided services
+    if (_wsServiceProvided) {
+      _handleInitialWebSocketStatus();
+    }
+
     // Listen to connection status changes
     _wsStatusSub = _wsService.statusStream.listen((status) {
       switch (status) {
@@ -186,7 +231,6 @@ class CameraService {
               connecting: true,
               connected: false,
               analyzing: false,
-              autoCaptured: false,
               feedbackState: FeedbackState.info,
             ),
           );
@@ -200,7 +244,6 @@ class CameraService {
               connecting: false,
               connected: true,
               analyzing: false,
-              autoCaptured: false,
               feedbackState: FeedbackState.info,
             ),
           );
@@ -216,7 +259,6 @@ class CameraService {
               connecting: true,
               connected: false,
               analyzing: false,
-              autoCaptured: false,
               feedbackState: FeedbackState.info,
             ),
           );
@@ -231,7 +273,6 @@ class CameraService {
               connecting: true,
               connected: false,
               analyzing: false,
-              autoCaptured: false,
               feedbackState: FeedbackState.error,
             ),
           );
@@ -248,15 +289,84 @@ class CameraService {
     });
   }
 
+  /// Handle initial WebSocket status for externally provided services
+  void _handleInitialWebSocketStatus() {
+    final currentStatus = _wsService.status;
+
+    switch (currentStatus) {
+      case WebSocketStatus.connected:
+        // Service is already connected, emit connected state immediately
+        _pendingRequest = false;
+        _emitFeedback(
+          DetectionFeedback(
+            message: FeedbackMessage.default_.text,
+            checks: _lastChecks,
+            connecting: false,
+            connected: true,
+            analyzing: false,
+            feedbackState: FeedbackState.info,
+          ),
+        );
+        _startDetectionLoop();
+        break;
+      case WebSocketStatus.connecting:
+        // Service is connecting, show connecting state
+        _emitFeedback(
+          DetectionFeedback(
+            message: FeedbackMessage.connecting.text,
+            checks: _lastChecks,
+            connecting: true,
+            connected: false,
+            analyzing: false,
+            feedbackState: FeedbackState.info,
+          ),
+        );
+        break;
+      case WebSocketStatus.disconnected:
+      case WebSocketStatus.error:
+        // Service is disconnected/error, show appropriate state
+        _emitFeedback(
+          DetectionFeedback(
+            message: FeedbackMessage.disconnected.text,
+            checks: _lastChecks,
+            connecting: false,
+            connected: false,
+            analyzing: false,
+            feedbackState: FeedbackState.info,
+          ),
+        );
+        break;
+    }
+  }
+
   void connect() {
     if (_disposed) return;
-    _wsService.connect();
+
+    // Only connect if we created the WebSocket service ourselves
+    // If it was provided externally, it should already be connected and handled in initialization
+    if (!_wsServiceProvided) {
+      _wsService.connect();
+    }
+
+    //Start periodic capture check as additional fallback
+    _startPeriodicCaptureCheck();
+    // Note: For externally provided services, status is already handled in _handleInitialWebSocketStatus
   }
 
   void _onWsMessage(Map<String, dynamic> data) {
     if (_disposed) return;
 
     final processingStart = DateTime.now();
+
+    // Track network response time for adaptive optimization
+    if (_requestStartTime != null) {
+      final networkResponseTime = processingStart
+          .difference(_requestStartTime!)
+          .inMilliseconds;
+      _performanceMetrics.addNetworkResponseTime(networkResponseTime);
+      developer.log('Network response time: ${networkResponseTime}ms');
+    }
+
     _pendingRequest = false;
 
     try {
@@ -272,7 +382,6 @@ class CameraService {
             connecting: false,
             connected: true,
             analyzing: false,
-            autoCaptured: false,
             feedbackState: FeedbackState.info,
             bbox: null,
           ),
@@ -304,12 +413,16 @@ class CameraService {
           final right = (bboxList[2] as num).toDouble();
           final bottom = (bboxList[3] as num).toDouble();
 
-          bbox = Rect.fromLTRB(left, top, right, bottom);
+          final croppedBbox = Rect.fromLTRB(left, top, right, bottom);
 
           developer.log(
-            'Parsed bbox LTRB: left=$left, top=$top, right=$right, bottom=$bottom',
+            'Parsed bbox from cropped image: left=$left, top=$top, right=$right, bottom=$bottom',
           );
-          developer.log('Converted to Rect: $bbox');
+
+          // Transform bbox from cropped image coordinates back to screen coordinates
+          bbox = _transformBboxFromCroppedToScreen(croppedBbox);
+
+          developer.log('Transformed bbox to screen coordinates: $bbox');
         } catch (e) {
           developer.log('Error parsing bbox: $e');
           bbox = null;
@@ -337,7 +450,6 @@ class CameraService {
           connecting: false,
           connected: true,
           analyzing: false,
-          autoCaptured: false,
           feedbackState: FeedbackState.error,
         ),
       );
@@ -346,6 +458,8 @@ class CameraService {
 
   void _startDetectionLoop() {
     _detectionTimer?.cancel();
+    _startImageStream(); // Start image stream for silent capture
+
     _detectionTimer = Timer.periodic(_currentDetectionInterval, (_) async {
       if (_disposed || !_wsService.isConnected || _pendingRequest) return;
 
@@ -359,83 +473,350 @@ class CameraService {
       _lastFrameTime = now;
 
       _pendingRequest = true;
+      _requestStartTime = DateTime.now(); // Track request start time
 
       try {
-        final arrayBuffer = await _captureOptimizedImageAsArrayBuffer();
-        if (arrayBuffer != null && !_disposed) {
-          developer.log('Sending image data: ${arrayBuffer.length} bytes');
-          _wsService.send(arrayBuffer);
+        if (_latestCameraImage != null) {
+          final arrayBuffer = await _processCameraImage(_latestCameraImage!);
+          if (arrayBuffer != null && !_disposed) {
+            developer.log(
+              'Sending optimized image data: ${arrayBuffer.length} bytes',
+            );
+            _wsService.send(arrayBuffer);
+          } else {
+            _pendingRequest = false;
+          }
+        } else {
+          _pendingRequest = false;
         }
       } catch (e) {
         _pendingRequest = false;
-        developer.log('Error capturing image: $e');
+        developer.log('Error processing camera image: $e');
       }
     });
   }
 
-  /// Converts image to ArrayBuffer format to match web implementation
-  Future<Uint8List?> _captureOptimizedImageAsArrayBuffer() async {
+  /// Start camera image stream for silent frame capture
+  void _startImageStream() async {
+    if (_isStreaming || _disposed) return;
+
     try {
-      // Ensure flash is off and camera is muted before taking picture
-      if (cameraController.value.flashMode != FlashMode.off) {
-        await cameraController.setFlashMode(FlashMode.off);
-      }
-
-      final XFile file = await cameraController.takePicture();
-      final bytes = await file.readAsBytes();
-
-      // Convert JPEG to PNG for consistent format
-      final pngBytes = await ImageCropper.convertToPng(bytes);
-
-      // Convert to base64 data URL format (similar to web implementation)
-      String base64Image = base64Encode(pngBytes);
-      String dataURL = 'data:image/png;base64,$base64Image';
-
-      developer.log('Created PNG data URL with length: ${dataURL.length}');
-
-      // Convert data URL to ArrayBuffer (matching web implementation)
-      return _dataURLToArrayBuffer(dataURL);
+      await cameraController.startImageStream((image) {
+        _latestCameraImage = image;
+      });
+      _isStreaming = true;
+      developer.log('Image stream started');
     } catch (e) {
-      developer.log('Error in _captureOptimizedImageAsArrayBuffer: $e');
+      developer.log('Error starting image stream: $e');
+    }
+  }
+
+  /// Stop camera image stream
+  void _stopImageStream() {
+    if (!_isStreaming) return;
+
+    try {
+      cameraController.stopImageStream();
+      _isStreaming = false;
+      _latestCameraImage = null;
+      developer.log('Image stream stopped');
+    } catch (e) {
+      developer.log('Error stopping image stream: $e');
+    }
+  }
+
+  /// Process camera image for detection
+  Future<Uint8List?> _processCameraImage(CameraImage image) async {
+    try {
+      // Convert CameraImage to PNG bytes
+      final pngBytes = await _convertCameraImageToPng(image);
+      final croppedBytes = await _cropImageForDetection(pngBytes);
+      final optimizedBytes = await _applyAdaptiveImageOptimization(
+        croppedBytes,
+      );
+
+      return optimizedBytes;
+    } catch (e) {
+      developer.log('Error processing camera image: $e');
       return null;
     }
   }
 
-  /// Converts data URL to ArrayBuffer (matches web implementation)
-  Uint8List _dataURLToArrayBuffer(String dataURL) {
-    // Split the data URL at the comma
-    final parts = dataURL.split(',');
-    if (parts.length != 2) {
-      throw Exception('Invalid data URL.');
+  /// Convert CameraImage to PNG format
+  Future<Uint8List> _convertCameraImageToPng(CameraImage image) async {
+    try {
+      ui.Image convertedImage;
+      if (image.format.group == ImageFormatGroup.yuv420) {
+        convertedImage = await _convertYUV420ToImage(image);
+      } else if (image.format.group == ImageFormatGroup.bgra8888) {
+        convertedImage = await _convertBGRA8888ToImage(image);
+      } else {
+        throw Exception('Unsupported image format: ${image.format}');
+      }
+
+      final byteData = await convertedImage.toByteData(
+        format: ui.ImageByteFormat.png,
+      );
+      return byteData!.buffer.asUint8List();
+    } catch (e) {
+      developer.log('Error converting camera image: $e');
+      rethrow;
     }
-
-    // The second part is the Base64 encoded string
-    final base64String = parts[1];
-
-    // Decode the Base64 string to bytes
-    final bytes = base64Decode(base64String);
-
-    developer.log('Converted to ArrayBuffer: ${bytes.length} bytes');
-
-    return bytes;
   }
 
-  Future<Uint8List> _compressImage(Uint8List bytes) async {
+  /// Convert YUV420 format to PNG
+  Future<ui.Image> _convertYUV420ToImage(CameraImage image) async {
+    final width = image.width;
+    final height = image.height;
+    final yPlane = image.planes[0];
+    final uPlane = image.planes[1];
+    final vPlane = image.planes[2];
+
+    final yBuffer = yPlane.bytes;
+    final uBuffer = uPlane.bytes;
+    final vBuffer = vPlane.bytes;
+
+    final yStride = yPlane.bytesPerRow;
+    final uStride = uPlane.bytesPerRow;
+    final vStride = vPlane.bytesPerRow;
+
+    final rgbaBuffer = Uint8List(width * height * 4);
+
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < width; x++) {
+        final uvIndex = (x ~/ 2) + (y ~/ 2) * (uStride ~/ 2);
+        final yIndex = x + y * yStride;
+
+        final yValue = yBuffer[yIndex];
+        final uValue = uBuffer[uvIndex];
+        final vValue = vBuffer[uvIndex];
+
+        // YUV to RGB conversion
+        final r = (yValue + 1.402 * (vValue - 128)).clamp(0, 255).toInt();
+        final g =
+            (yValue - 0.344136 * (uValue - 128) - 0.714136 * (vValue - 128))
+                .clamp(0, 255)
+                .toInt();
+        final b = (yValue + 1.772 * (uValue - 128)).clamp(0, 255).toInt();
+
+        final index = (x + y * width) * 4;
+        rgbaBuffer[index] = r;
+        rgbaBuffer[index + 1] = g;
+        rgbaBuffer[index + 2] = b;
+        rgbaBuffer[index + 3] = 255; // Alpha
+      }
+    }
+
+    final completer = Completer<ui.Image>();
+    ui.decodeImageFromPixels(
+      rgbaBuffer,
+      width,
+      height,
+      ui.PixelFormat.rgba8888,
+      (result) {
+        completer.complete(result);
+      },
+    );
+
+    return completer.future;
+  }
+
+  /// Convert BGRA8888 format to PNG
+  Future<ui.Image> _convertBGRA8888ToImage(CameraImage image) async {
+    final width = image.width;
+    final height = image.height;
+    final plane = image.planes[0];
+    final bytes = plane.bytes;
+    final bytesPerRow = plane.bytesPerRow;
+
+    final completer = Completer<ui.Image>();
+    ui.decodeImageFromPixels(bytes, width, height, ui.PixelFormat.bgra8888, (
+      result,
+    ) {
+      completer.complete(result);
+    }, rowBytes: bytesPerRow);
+
+    return completer.future;
+  }
+
+  /// Crops image using same logic as manual capture but with full width and 25% vertical padding
+  /// Matches the coordinate transformation used in manual capture for consistency
+  Future<Uint8List> _cropImageForDetection(Uint8List originalBytes) async {
     try {
-      final codec = await ui.instantiateImageCodec(bytes);
+      // Convert to PNG and get actual image dimensions (same as manual capture)
+      final pngBytes = await ImageCropper.convertToPng(originalBytes);
+      final codec = await ui.instantiateImageCodec(pngBytes);
+      final frame = await codec.getNextFrame();
+      final actualImage = frame.image;
+      final imageWidth = actualImage.width.toDouble();
+      final imageHeight = actualImage.height.toDouble();
+
+      // Get camera preview size (note: in portrait mode, width/height are swapped)
+      final previewSize = cameraController.value.previewSize!;
+      final cameraWidth = previewSize.height
+          .toDouble(); // Actual camera width in portrait
+      final cameraHeight = previewSize.width
+          .toDouble(); // Actual camera height in portrait
+
+      // Calculate how the camera preview is displayed on screen
+      final screenWidth = screenSize.width;
+      final screenHeight = screenSize.height;
+
+      // Camera preview is typically scaled to fill the screen height and center-cropped for width
+      final previewScale = screenHeight / cameraHeight;
+      final scaledPreviewWidth = cameraWidth * previewScale;
+
+      // If scaled preview is wider than screen, it gets center-cropped
+      final cropOffsetX = (scaledPreviewWidth - screenWidth) / 2;
+
+      // Calculate the actual scaling from screen coordinates to image coordinates
+      final scaleX = imageWidth / cameraWidth;
+      final scaleY = imageHeight / cameraHeight;
+
+      developer.log(
+        'Detection crop - Image: ${imageWidth}x${imageHeight}, Camera: ${cameraWidth}x${cameraHeight}',
+      );
+      developer.log(
+        'Detection crop - Screen: ${screenWidth}x${screenHeight}, Scale: $previewScale, OffsetX: $cropOffsetX',
+      );
+
+      // Create extended target rectangle: full width, target height + padding top/bottom
+      final targetHeight = targetRect.height;
+      final verticalPadding = targetHeight * _kDetectionCropPadding;
+
+      final extendedTargetRect = Rect.fromLTWH(
+        0, // Full width - start from screen left
+        targetRect.top - verticalPadding, // 25% more above target
+        screenWidth, // Full screen width
+        targetRect.height +
+            (2 * verticalPadding), // Target height + 25% top + 25% bottom
+      );
+
+      // Transform extended target rectangle from screen coordinates to camera coordinates
+      final cameraTargetRect = Rect.fromLTWH(
+        (extendedTargetRect.left + cropOffsetX) / previewScale,
+        extendedTargetRect.top / previewScale,
+        extendedTargetRect.width / previewScale,
+        extendedTargetRect.height / previewScale,
+      );
+
+      // Then scale from camera coordinates to actual image coordinates
+      final imageTargetRect = Rect.fromLTWH(
+        cameraTargetRect.left * scaleX,
+        cameraTargetRect.top * scaleY,
+        cameraTargetRect.width * scaleX,
+        cameraTargetRect.height * scaleY,
+      );
+
+      // Clamp to image bounds to prevent cropping outside image
+      final finalCropRect = Rect.fromLTRB(
+        imageTargetRect.left.clamp(0.0, imageWidth),
+        imageTargetRect.top.clamp(0.0, imageHeight),
+        imageTargetRect.right.clamp(0.0, imageWidth),
+        imageTargetRect.bottom.clamp(0.0, imageHeight),
+      );
+
+      developer.log('Detection crop - Extended target: $extendedTargetRect');
+      developer.log('Detection crop - Camera target: $cameraTargetRect');
+      developer.log('Detection crop - Image target: $imageTargetRect');
+      developer.log('Detection crop - Final clamped: $finalCropRect');
+
+      // Convert to bbox format for cropping (same as manual capture)
+      final targetBboxList = [
+        finalCropRect.left,
+        finalCropRect.top,
+        finalCropRect.right,
+        finalCropRect.bottom,
+      ];
+
+      // Use ImageCropper.cropImage (same as manual capture)
+      final croppedBytes = await ImageCropper.cropImage(
+        pngBytes,
+        targetBboxList,
+      );
+
+      developer.log(
+        'Detection crop completed: ${originalBytes.length} → ${croppedBytes.length} bytes '
+        '(${((croppedBytes.length / originalBytes.length) * 100).toStringAsFixed(1)}% of original)',
+      );
+
+      return croppedBytes;
+    } catch (e) {
+      developer.log('Error cropping image for detection: $e');
+      return originalBytes; // Return original if cropping fails
+    }
+  }
+
+  /// Transforms bbox coordinates from cropped image space back to screen coordinates
+  /// This accounts for the cropping we did before sending to the server
+  Rect _transformBboxFromCroppedToScreen(Rect croppedBbox) {
+    try {
+      // Calculate the cropping offset we used (same as in _cropImageForDetection)
+      final targetHeight = targetRect.height;
+      final verticalPadding = targetHeight * _kDetectionCropPadding;
+
+      // The server's bbox is relative to the cropped image, so we need to transform it back
+      // to the original screen coordinate system by adding back the crop offsets
+
+      final cropOffsetX = 0.0; // No horizontal offset (full width)
+      final cropOffsetY = targetRect.top - verticalPadding; // Vertical offset
+
+      // Transform bbox from cropped image coordinates to screen coordinates
+      // Simply add back the crop offsets (no scaling needed since coordinates are in same space)
+      final screenBbox = Rect.fromLTWH(
+        croppedBbox.left + cropOffsetX, // Add horizontal crop offset (0)
+        croppedBbox.top + cropOffsetY, // Add vertical crop offset
+        croppedBbox.width, // Width unchanged
+        croppedBbox.height, // Height unchanged
+      );
+
+      developer.log('Bbox transformation:');
+      developer.log('  Server bbox (cropped image): $croppedBbox');
+      developer.log('  Crop offset: X=$cropOffsetX, Y=$cropOffsetY');
+      developer.log('  Transformed bbox (screen): $screenBbox');
+      developer.log('  Target rect (screen): $targetRect');
+
+      return screenBbox;
+    } catch (e) {
+      developer.log('Error transforming bbox coordinates: $e');
+      return croppedBbox; // Return original if transformation fails
+    }
+  }
+
+  /// Applies adaptive image optimization based on current network performance
+  Future<Uint8List> _applyAdaptiveImageOptimization(
+    Uint8List originalBytes,
+  ) async {
+    try {
+      final codec = await ui.instantiateImageCodec(originalBytes);
       final frame = await codec.getNextFrame();
       final image = frame.image;
 
-      // Reduce image size for better performance and ensure PNG format
-      final resizedImage = await _resizeImage(image, 0.8);
-      final byteData = await resizedImage.toByteData(
+      // Apply scaling if needed for poor connections
+      ui.Image processedImage = image;
+      if (_currentImageScale < 1.0) {
+        processedImage = await _resizeImage(image, _currentImageScale);
+        developer.log(
+          'Resized image by ${(_currentImageScale * 100).toStringAsFixed(0)}%',
+        );
+      }
+
+      // Always use PNG format with adaptive quality and scaling
+      final byteData = await processedImage.toByteData(
         format: ui.ImageByteFormat.png,
       );
+      final optimizedBytes = byteData!.buffer.asUint8List();
 
-      return byteData!.buffer.asUint8List();
+      developer.log(
+        'Using PNG format with ${(_currentImageQuality * 100).toStringAsFixed(0)}% quality, '
+        '${(_currentImageScale * 100).toStringAsFixed(0)}% scale',
+      );
+
+      return optimizedBytes;
     } catch (e) {
-      developer.log('Error compressing image: $e');
-      return bytes; // Return original if compression fails
+      developer.log('Error in adaptive optimization: $e');
+      // Fallback to original bytes if optimization fails
+      return originalBytes;
     }
   }
 
@@ -465,42 +846,105 @@ class CameraService {
   }
 
   void _adjustPerformanceSettings() {
-    if (_performanceMetrics.isPerformancePoor) {
-      // Reduce performance demands
-      if (_currentDetectionInterval < _maxDetectionInterval) {
-        _currentDetectionInterval = Duration(
-          milliseconds: (_currentDetectionInterval.inMilliseconds * 1.2)
-              .round(),
-        );
-        _restartDetectionLoop();
-      }
+    final metrics = _performanceMetrics;
 
-      if (_currentImageQuality > _minImageQuality) {
-        _currentImageQuality = (_currentImageQuality * 0.9).clamp(
-          _minImageQuality,
-          _maxImageQuality,
-        );
-      }
+    if (metrics.isPerformancePoor || metrics.isNetworkSlow) {
+      // Aggressive optimization for poor connections
+      _reduceQualityForPoorConnection();
 
       developer.log(
-        'Performance poor, reducing quality: interval=${_currentDetectionInterval.inMilliseconds}ms, quality=$_currentImageQuality',
+        'Poor performance detected - Network: ${metrics.averageNetworkResponseTime.toStringAsFixed(0)}ms, '
+        'Processing: ${metrics.averageProcessingTime.toStringAsFixed(0)}ms',
       );
-    } else if (_performanceMetrics.isPerformanceGood) {
-      // Increase performance if possible
-      if (_currentDetectionInterval > _minDetectionInterval) {
-        _currentDetectionInterval = Duration(
-          milliseconds: (_currentDetectionInterval.inMilliseconds * 0.9)
-              .round(),
-        );
-        _restartDetectionLoop();
-      }
+    } else if (metrics.isPerformanceGood && metrics.isNetworkFast) {
+      // Increase quality for good connections
+      _increaseQualityForGoodConnection();
 
-      if (_currentImageQuality < _maxImageQuality) {
-        _currentImageQuality = (_currentImageQuality * 1.1).clamp(
-          _minImageQuality,
-          _maxImageQuality,
-        );
-      }
+      developer.log(
+        'Good performance detected - Network: ${metrics.averageNetworkResponseTime.toStringAsFixed(0)}ms, '
+        'Processing: ${metrics.averageProcessingTime.toStringAsFixed(0)}ms',
+      );
+    }
+
+    developer.log(
+      'Current settings: interval=${_currentDetectionInterval.inMilliseconds}ms, '
+      'quality=${(_currentImageQuality * 100).toStringAsFixed(0)}%, '
+      'scale=${(_currentImageScale * 100).toStringAsFixed(0)}% (PNG format)',
+    );
+  }
+
+  void _reduceQualityForPoorConnection() {
+    bool settingsChanged = false;
+
+    // Increase detection interval to reduce network load
+    if (_currentDetectionInterval < _kMaxDetectionInterval) {
+      _currentDetectionInterval = Duration(
+        milliseconds: (_currentDetectionInterval.inMilliseconds * 1.3).round(),
+      );
+      _restartDetectionLoop();
+      settingsChanged = true;
+    }
+
+    // Reduce image quality
+    if (_currentImageQuality > _kMinImageQuality) {
+      _currentImageQuality = (_currentImageQuality * 0.85).clamp(
+        _kMinImageQuality,
+        _kMaxImageQuality,
+      );
+      settingsChanged = true;
+    }
+
+    // Reduce image scale for very poor connections
+    if (_performanceMetrics.averageNetworkResponseTime > 1500 &&
+        _currentImageScale > _kMinImageScale) {
+      _currentImageScale = (_currentImageScale * 0.9).clamp(
+        _kMinImageScale,
+        1.0,
+      );
+      settingsChanged = true;
+    }
+
+    // Note: Always using PNG format as requested
+
+    if (settingsChanged) {
+      developer.log('Reduced quality for poor connection');
+    }
+  }
+
+  void _increaseQualityForGoodConnection() {
+    bool settingsChanged = false;
+
+    // Decrease detection interval for faster response
+    if (_currentDetectionInterval > _kMinDetectionInterval) {
+      _currentDetectionInterval = Duration(
+        milliseconds: (_currentDetectionInterval.inMilliseconds * 0.9).round(),
+      );
+      _restartDetectionLoop();
+      settingsChanged = true;
+    }
+
+    // Increase image quality
+    if (_currentImageQuality < _kMaxImageQuality) {
+      _currentImageQuality = (_currentImageQuality * 1.1).clamp(
+        _kMinImageQuality,
+        _kMaxImageQuality,
+      );
+      settingsChanged = true;
+    }
+
+    // Restore full image scale
+    if (_currentImageScale < 1.0) {
+      _currentImageScale = (_currentImageScale * 1.1).clamp(
+        _kMinImageScale,
+        1.0,
+      );
+      settingsChanged = true;
+    }
+
+    // Note: Always using PNG format as requested
+
+    if (settingsChanged) {
+      developer.log('Increased quality for good connection');
     }
   }
 
@@ -527,7 +971,6 @@ class CameraService {
           connecting: false,
           connected: true,
           analyzing: false,
-          autoCaptured: false,
           bbox: null,
           feedbackState: FeedbackState.info,
         ),
@@ -535,33 +978,23 @@ class CameraService {
       return;
     }
 
-    _lastBbox = bbox; // Always update last bbox if not null
+    _lastBbox = bbox;
 
-    // Transform bbox from image coordinates to screen coordinates for proper comparison
-    final screenBbox = _transformBboxToScreenCoordinates(bbox);
-
-    developer.log('Original bbox (image coords): $bbox');
-    developer.log('Transformed bbox (screen coords): $screenBbox');
-    developer.log('Target rect (screen coords): $targetRect');
+    // The bbox from _transformBboxFromCroppedToScreen is in screen coordinates
+    final screenBbox = bbox;
 
     final feedback = _bboxFeedback(screenBbox);
     final isInside = feedback == FeedbackMessage.good.text;
     final passAllChecks = _areAllDetectionChecksPassed();
 
-    developer.log('Feedback message: $feedback');
-    developer.log('Is inside: $isInside, Pass all checks: $passAllChecks');
-
-    // Match web logic: if (isInside && bbox && passAllChecks)
     if (isInside && passAllChecks) {
-      // Only start timer if one isn't already running
-      if (_steadyTimer == null || !_steadyTimer!.isActive) return;
-      _steadyTimer = Timer(steadyDelay, () {
-        developer.log('Auto-capture timer completed - triggering capture');
-        _autoCapture();
-      });
-      developer.log(
-        'Started timer - waiting ${steadyDelay.inMilliseconds}ms for auto-capture',
-      );
+      if (_steadyStartTime == null) {
+        // Start steady period
+        _steadyStartTime = DateTime.now();
+        developer.log(
+          'Steady period started - periodic check will handle capture',
+        );
+      }
     } else {
       _resetSteadyState();
     }
@@ -573,19 +1006,48 @@ class CameraService {
         connecting: _wsService.isConnecting,
         connected: _wsService.isConnected,
         analyzing: false,
-        autoCaptured: false,
         bbox: bbox,
         feedbackState: _getFeedbackStateFromMessage(feedback),
       ),
     );
   }
 
-  /// Reset steady state - matches web resetSteadyState()
+  void _startPeriodicCaptureCheck() {
+    // Cancel any existing timer
+    _periodicCaptureTimer?.cancel();
+
+    _periodicCaptureTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_disposed) {
+        timer.cancel();
+        return;
+      }
+
+      // Independent capture check based on current state
+      if (_steadyStartTime != null && !_captureTriggered) {
+        final steadyDuration = DateTime.now().difference(_steadyStartTime!);
+
+        if (steadyDuration >= _kSteadyDelay) {
+          // Check current state without waiting for server
+          if (_lastBbox != null) {
+            final currentFeedback = _bboxFeedback(_lastBbox!);
+            final isCurrentStateGood =
+                currentFeedback == FeedbackMessage.good.text;
+            final currentChecksGood = _areAllDetectionChecksPassed();
+
+            if (isCurrentStateGood && currentChecksGood) {
+              _captureTriggered = true;
+              capture();
+            }
+          }
+        }
+      }
+    });
+  }
+
   void _resetSteadyState() {
-    _steadyTimer?.cancel();
-    _steadyTimer = null;
-    _insideSince = null;
-    developer.log('Reset steady state');
+    _steadyStartTime = null;
+    _captureTriggered = false;
+    developer.log('Steady state reset');
   }
 
   /// Determine feedback state based on message content
@@ -605,83 +1067,6 @@ class CameraService {
     }
   }
 
-  /// Transform bbox coordinates from image space to screen space
-  Rect _transformBboxToScreenCoordinates(Rect imageBbox) {
-    try {
-      // Get camera preview size (note: in portrait mode, width/height are swapped)
-      final previewSize = cameraController.value.previewSize!;
-      final cameraWidth = previewSize.height
-          .toDouble(); // Actual camera width in portrait
-      final cameraHeight = previewSize.width
-          .toDouble(); // Actual camera height in portrait
-
-      // Calculate how the camera preview is displayed on screen
-      final screenWidth = screenSize.width;
-      final screenHeight = screenSize.height;
-
-      // Camera preview is typically scaled to fill the screen height and center-cropped for width
-      final previewScale = screenHeight / cameraHeight;
-      final scaledPreviewWidth = cameraWidth * previewScale;
-
-      // If scaled preview is wider than screen, it gets center-cropped
-      final cropOffsetX = (scaledPreviewWidth - screenWidth) / 2;
-
-      // Determine if bbox coordinates are normalized (0-1) or absolute pixels
-      Rect normalizedBbox;
-      if (imageBbox.left <= 1.0 &&
-          imageBbox.top <= 1.0 &&
-          imageBbox.right <= 1.0 &&
-          imageBbox.bottom <= 1.0) {
-        // Coordinates are normalized (0-1), convert to camera pixel coordinates
-        normalizedBbox = Rect.fromLTWH(
-          imageBbox.left * cameraWidth,
-          imageBbox.top * cameraHeight,
-          (imageBbox.right - imageBbox.left) * cameraWidth,
-          (imageBbox.bottom - imageBbox.top) * cameraHeight,
-        );
-        developer.log(
-          'Detected normalized coordinates, converted to: $normalizedBbox',
-        );
-      } else {
-        // Coordinates are already in pixel space (camera coordinates)
-        normalizedBbox = imageBbox;
-        developer.log('Using absolute pixel coordinates: $normalizedBbox');
-      }
-
-      // Transform: camera coordinates → screen coordinates
-
-      // Step 1: Scale from camera coordinates to screen preview coordinates
-      final previewRect = Rect.fromLTWH(
-        normalizedBbox.left * previewScale,
-        normalizedBbox.top * previewScale,
-        normalizedBbox.width * previewScale,
-        normalizedBbox.height * previewScale,
-      );
-
-      // Step 2: Adjust for center-crop offset to get final screen coordinates
-      final screenRect = Rect.fromLTWH(
-        previewRect.left - cropOffsetX,
-        previewRect.top,
-        previewRect.width,
-        previewRect.height,
-      );
-
-      developer.log('Camera dimensions: ${cameraWidth}x${cameraHeight}');
-      developer.log('Screen dimensions: ${screenWidth}x${screenHeight}');
-      developer.log('Preview scale: $previewScale');
-      developer.log('Scaled preview width: $scaledPreviewWidth');
-      developer.log('Crop offset X: $cropOffsetX');
-      developer.log('Preview rect: $previewRect');
-      developer.log('Final screen rect: $screenRect');
-
-      return screenRect;
-    } catch (e) {
-      developer.log('Error transforming bbox coordinates: $e');
-      // Return original bbox if transformation fails
-      return imageBbox;
-    }
-  }
-
   void _emitFeedback(DetectionFeedback feedback) {
     if (_disposed) return;
 
@@ -689,91 +1074,182 @@ class CameraService {
     _debounceTimer?.cancel();
     _debounceTimer = Timer(const Duration(milliseconds: 16), () {
       if (!_disposed) {
-        _lastFeedback = feedback;
         _feedbackController.add(feedback);
       }
     });
   }
 
-  String _bboxFeedback(Rect bbox) {
-    // Check if bbox is reasonably positioned within target area with forgiveness
-    const forgiveness =
-        30; // 30px forgiveness - bbox can extend outside target area
+  String _bboxFeedbackOld(Rect bbox) {
+    // Check if detection quality is good
+    final qualityGood = _areAllDetectionChecksPassed();
 
-    // Calculate how much the bbox extends outside the target area
-    final overlapLeft = bbox.left < targetRect.left
-        ? targetRect.left - bbox.left
-        : 0.0;
-    final overlapTop = bbox.top < targetRect.top
-        ? targetRect.top - bbox.top
-        : 0.0;
-    final overlapRight = bbox.right > targetRect.right
-        ? bbox.right - targetRect.right
-        : 0.0;
-    final overlapBottom = bbox.bottom > targetRect.bottom
-        ? bbox.bottom - targetRect.bottom
-        : 0.0;
+    // Calculate bbox center
+    final bboxCenter = bbox.center;
+    final targetCenter = targetRect.center;
 
-    final maxOverlap = [
-      overlapLeft,
-      overlapTop,
-      overlapRight,
-      overlapBottom,
-    ].reduce((a, b) => a > b ? a : b);
+    // Calculate offsets
+    final centerOffsetX = bboxCenter.dx - targetCenter.dx;
+    final centerOffsetY = bboxCenter.dy - targetCenter.dy;
 
-    // Check if bbox is reasonably positioned (within forgiveness)
-    bool isInGoodPosition = maxOverlap <= forgiveness;
+    // Calculate how much we need to move horizontally and vertically
+    final horizontalMove = centerOffsetX.abs();
+    final verticalMove = centerOffsetY.abs();
 
-    // Check if all detection checks are PASS
-    bool allChecksPassed = _areAllDetectionChecksPassed();
+    // 1. Center alignment check (most important)
+    final centered =
+        horizontalMove <= _kPositionTolerance &&
+        verticalMove <= _kPositionTolerance;
 
-    if (isInGoodPosition && allChecksPassed) {
+    // 2. IMPROVED: Overlap check instead of full containment
+    // Check if there's significant overlap between bbox and target
+    final overlapRect = bbox.intersect(targetRect);
+    final overlapArea = overlapRect.width * overlapRect.height;
+    final bboxArea = bbox.width * bbox.height;
+    final targetArea = targetRect.width * targetRect.height;
+
+    // Require at least 70% of bbox to be inside target, OR
+    // at least 70% of target to be covered by bbox
+    final overlapRatio = overlapArea / bboxArea;
+    final coverageRatio = overlapArea / targetArea;
+    final sufficientOverlap = overlapRatio >= 0.7 || coverageRatio >= 0.7;
+
+    // 3. Size appropriateness check - be more lenient
+    final sizeRatio = bbox.width / targetRect.width;
+    final properSize =
+        sizeRatio >= 0.6 && sizeRatio <= 1.4; // More lenient range
+
+    // Combine all position requirements
+    final positionGood = centered && sufficientOverlap && properSize;
+
+    if (positionGood && qualityGood) {
       return FeedbackMessage.good.text;
     }
 
-    // If position is good but checks failed, give specific quality feedback
-    if (isInGoodPosition && !allChecksPassed) {
+    if (positionGood && !qualityGood) {
       return FeedbackMessage.goodPositionBadQuality.text;
     }
 
-    // Provide specific directional feedback based on where the bbox is relative to target
-    String result;
+    // Directional feedback - only suggest one direction at a time
+    if (verticalMove > horizontalMove) {
+      // Vertical movement needed
+      if (centerOffsetY > _kPositionTolerance) {
+        return FeedbackMessage.tooLow.text;
+      } else if (centerOffsetY < -_kPositionTolerance) {
+        return FeedbackMessage.tooHigh.text;
+      }
+    }
 
-    // Check vertical position first (priority)
-    if (bbox.bottom < targetRect.top) {
-      // Bbox is above target area
-      result = FeedbackMessage.tooHigh.text;
-    } else if (bbox.top > targetRect.bottom) {
-      // Bbox is below target area
-      result = FeedbackMessage.tooLow.text;
+    if (horizontalMove > verticalMove) {
+      // Horizontal movement needed
+      if (centerOffsetX > _kPositionTolerance) {
+        return FeedbackMessage.moveLeft.text;
+      } else if (centerOffsetX < -_kPositionTolerance) {
+        return FeedbackMessage.moveRight.text;
+      }
     }
-    // Check horizontal position
-    else if (bbox.right < targetRect.left) {
-      // Bbox is to the left of target area
-      result = FeedbackMessage.moveRight.text;
-    } else if (bbox.left > targetRect.right) {
-      // Bbox is to the right of target area
-      result = FeedbackMessage.moveLeft.text;
-    }
-    // Partial overlap cases - give most relevant direction
-    else if (bbox.left < targetRect.left) {
-      // Bbox extends too far left
-      result = FeedbackMessage.moveRight.text;
-    } else if (bbox.right > targetRect.right) {
-      // Bbox extends too far right
-      result = FeedbackMessage.moveLeft.text;
-    } else if (bbox.top < targetRect.top) {
-      // Bbox extends too far up
-      result = FeedbackMessage.tooLow.text;
-    } else if (bbox.bottom > targetRect.bottom) {
-      // Bbox extends too far down
-      result = FeedbackMessage.tooHigh.text;
+
+    // If we get here, the position is close but not perfect
+    // Check the most significant deviation
+    if (verticalMove >= horizontalMove) {
+      if (centerOffsetY > 0) {
+        return FeedbackMessage.tooLow.text;
+      } else {
+        return FeedbackMessage.tooHigh.text;
+      }
     } else {
-      // Fallback case
-      result = FeedbackMessage.default_.text;
+      if (centerOffsetX > 0) {
+        return FeedbackMessage.moveLeft.text;
+      } else {
+        return FeedbackMessage.moveRight.text;
+      }
+    }
+  }
+
+  String _bboxFeedback(Rect bbox) {
+    // Check if detection quality is good
+    final qualityGood = _areAllDetectionChecksPassed();
+
+    // Calculate bbox center
+    final bboxCenter = bbox.center;
+    final targetCenter = targetRect.center;
+
+    // Calculate offsets
+    final centerOffsetX = bboxCenter.dx - targetCenter.dx;
+    final centerOffsetY = bboxCenter.dy - targetCenter.dy;
+
+    // Calculate how much we need to move horizontally and vertically
+    final horizontalMove = centerOffsetX.abs();
+    final verticalMove = centerOffsetY.abs();
+
+    // 2. Overlap check - more practical thresholds
+    final overlapRect = bbox.intersect(targetRect);
+    final overlapArea = overlapRect.width * overlapRect.height;
+    final bboxArea = bbox.width * bbox.height;
+    final targetArea = targetRect.width * targetRect.height;
+
+    // More lenient overlap requirements
+    final overlapRatio = overlapArea / bboxArea;
+    final coverageRatio = overlapArea / targetArea;
+    final goodOverlap = overlapRatio >= 0.5 || coverageRatio >= 0.5;
+
+    // 3. Size check - very lenient
+    final sizeRatio = bbox.width / targetRect.width;
+    final reasonableSize = sizeRatio >= 0.4 && sizeRatio <= 2.0;
+
+    // Position is good if we have reasonable overlap AND reasonable size
+    // Don't require perfect centering - overlap is more important
+    final positionGood = goodOverlap && reasonableSize;
+
+    if (positionGood && qualityGood) {
+      return FeedbackMessage.good.text;
     }
 
-    return result;
+    if (positionGood && !qualityGood) {
+      return FeedbackMessage.goodPositionBadQuality.text;
+    }
+
+    // Directional feedback - only suggest one direction at a time
+    if (verticalMove > horizontalMove) {
+      // Vertical movement needed
+      if (centerOffsetY > _kPositionTolerance) {
+        return FeedbackMessage.tooHigh.text; // bbox is below target, move up
+      } else if (centerOffsetY < -_kPositionTolerance) {
+        return FeedbackMessage.tooLow.text; // bbox is above target, move down
+      }
+    }
+
+    if (horizontalMove > verticalMove) {
+      // Horizontal movement needed
+      if (centerOffsetX > _kPositionTolerance) {
+        return FeedbackMessage
+            .moveRight
+            .text; // bbox is right of target, move right
+      } else if (centerOffsetX < -_kPositionTolerance) {
+        return FeedbackMessage
+            .moveLeft
+            .text; // bbox is left of target, move left
+      }
+    }
+
+    // If we get here, the position is close but not perfect
+    // Check the most significant deviation
+    if (verticalMove >= horizontalMove) {
+      if (centerOffsetY > 0) {
+        return FeedbackMessage.tooHigh.text; // bbox is below target, move up
+      } else {
+        return FeedbackMessage.tooLow.text; // bbox is above target, move down
+      }
+    } else {
+      if (centerOffsetX > 0) {
+        return FeedbackMessage
+            .moveRight
+            .text; // bbox is right of target, move right
+      } else {
+        return FeedbackMessage
+            .moveLeft
+            .text; // bbox is left of target, move left
+      }
+    }
   }
 
   /// Check if all detection checks have passed
@@ -795,11 +1271,12 @@ class CameraService {
     return darknessOk && brightnessOk && blurOk && glareOk;
   }
 
-  void _autoCapture() async {
+  // Manual capture method - captures and crops image to target rectangle
+  Future<void> capture() async {
     if (_disposed) return;
 
     try {
-      // Ensure flash is off and camera is muted before taking picture
+      // Ensure flash is off before taking picture
       if (cameraController.value.flashMode != FlashMode.off) {
         await cameraController.setFlashMode(FlashMode.off);
       }
@@ -810,60 +1287,112 @@ class CameraService {
       // Convert to PNG format
       final pngBytes = await ImageCropper.convertToPng(originalBytes);
 
-      XFile resultFile = file;
+      // Get actual image dimensions
+      final codec = await ui.instantiateImageCodec(pngBytes);
+      final frame = await codec.getNextFrame();
+      final actualImage = frame.image;
+      final imageWidth = actualImage.width.toDouble();
+      final imageHeight = actualImage.height.toDouble();
 
-      // If bbox is available, crop the image with 10px padding
-      if (_lastBbox != null) {
-        // Add 10px padding to all sides of the bbox
-        const padding = 10.0;
-        final paddedBbox = Rect.fromLTRB(
-          _lastBbox!.left - padding, // Left: -10px
-          _lastBbox!.top - padding, // Top: -10px
-          _lastBbox!.right + padding, // Right: +10px
-          _lastBbox!.bottom + padding, // Bottom: +10px
-        );
+      // Get camera preview size (note: in portrait mode, width/height are swapped)
+      final previewSize = cameraController.value.previewSize!;
+      final cameraWidth = previewSize.height
+          .toDouble(); // Actual camera width in portrait
+      final cameraHeight = previewSize.width
+          .toDouble(); // Actual camera height in portrait
 
-        developer.log('Original bbox: $_lastBbox');
-        developer.log('Padded bbox (10px): $paddedBbox');
+      // Calculate how the camera preview is displayed on screen
+      final screenWidth = screenSize.width;
+      final screenHeight = screenSize.height;
 
-        // Uses the padded bbox for cropping
-        final bboxList = [
-          paddedBbox.left,
-          paddedBbox.top,
-          paddedBbox.right,
-          paddedBbox.bottom,
-        ];
-        final croppedBytes = await ImageCropper.cropImage(pngBytes, bboxList);
-        final croppedPath = await ImageCropper.saveCroppedImage(
-          croppedBytes,
-          file.path.replaceAll('.jpg', '.png'),
-        );
-        resultFile = XFile(croppedPath);
-      } else {
-        // Save PNG version even without cropping
-        final pngPath = await ImageCropper.saveCroppedImage(
-          pngBytes,
-          file.path.replaceAll('.jpg', '.png'),
-        );
-        resultFile = XFile(pngPath);
-      }
+      // Camera preview is typically scaled to fill the screen height and center-cropped for width
+      final previewScale = screenHeight / cameraHeight;
+      final scaledPreviewWidth = cameraWidth * previewScale;
 
-      _autoCaptureController.add(resultFile);
+      // If scaled preview is wider than screen, it gets center-cropped
+      final cropOffsetX = (scaledPreviewWidth - screenWidth) / 2;
 
-      _emitFeedback(
-        DetectionFeedback(
-          message: FeedbackMessage.captured.text,
-          checks: _lastChecks,
-          connecting: false,
-          connected: true,
-          analyzing: false,
-          autoCaptured: true,
-          bbox: _lastBbox,
-          feedbackState: FeedbackState.success,
-        ),
+      // Calculate the actual scaling from screen coordinates to image coordinates
+      final scaleX = imageWidth / cameraWidth;
+      final scaleY = imageHeight / cameraHeight;
+
+      developer.log('Manual capture - Image: ${imageWidth}x${imageHeight}');
+      developer.log('Manual capture - Camera: ${cameraWidth}x${cameraHeight}');
+      developer.log('Manual capture - Screen: ${screenWidth}x${screenHeight}');
+      developer.log('Manual capture - Preview scale: $previewScale');
+      developer.log(
+        'Manual capture - Scaled preview width: $scaledPreviewWidth',
+      );
+      developer.log('Manual capture - Crop offset X: $cropOffsetX');
+      developer.log(
+        'Manual capture - Image scale factors: scaleX=$scaleX, scaleY=$scaleY',
+      );
+
+      // Transform target rectangle from screen coordinates to camera coordinates
+      final cameraTargetRect = Rect.fromLTWH(
+        (targetRect.left + cropOffsetX) / previewScale,
+        targetRect.top / previewScale,
+        targetRect.width / previewScale,
+        targetRect.height / previewScale,
+      );
+
+      // Then scale from camera coordinates to actual image coordinates
+      final imageTargetRect = Rect.fromLTWH(
+        cameraTargetRect.left * scaleX,
+        cameraTargetRect.top * scaleY,
+        cameraTargetRect.width * scaleX,
+        cameraTargetRect.height * scaleY,
+      );
+
+      // Add padding to the target area for better cropping
+      final paddedImageRect = Rect.fromLTRB(
+        imageTargetRect.left - _kCropPadding,
+        imageTargetRect.top - _kCropPadding,
+        imageTargetRect.right + _kCropPadding,
+        imageTargetRect.bottom + _kCropPadding,
+      );
+
+      // Clamp to image bounds to prevent cropping outside image
+      final clampedRect = Rect.fromLTRB(
+        paddedImageRect.left.clamp(0.0, imageWidth),
+        paddedImageRect.top.clamp(0.0, imageHeight),
+        paddedImageRect.right.clamp(0.0, imageWidth),
+        paddedImageRect.bottom.clamp(0.0, imageHeight),
+      );
+
+      developer.log('Manual capture - Original target rect: $targetRect');
+      developer.log('Manual capture - Camera target rect: $cameraTargetRect');
+      developer.log('Manual capture - Image target rect: $imageTargetRect');
+      developer.log(
+        'Manual capture - Padded image rect (10px): $paddedImageRect',
+      );
+      developer.log('Manual capture - Clamped rect: $clampedRect');
+
+      // Convert to bbox format for cropping
+      final targetBboxList = [
+        clampedRect.left,
+        clampedRect.top,
+        clampedRect.right,
+        clampedRect.bottom,
+      ];
+
+      final croppedBytes = await ImageCropper.cropImage(
+        pngBytes,
+        targetBboxList,
+      );
+      final croppedPath = await ImageCropper.saveCroppedImage(
+        croppedBytes,
+        file.path.replaceAll('.jpg', '.png'),
+      );
+
+      final croppedFile = XFile(croppedPath);
+      _captureController.add(croppedFile);
+
+      developer.log(
+        'Manual capture completed with proper coordinate transformation',
       );
     } catch (e) {
-      developer.log('Error during auto-capture: $e');
+      developer.log('Error during manual capture: $e');
     }
   }
 
@@ -871,7 +1400,12 @@ class CameraService {
     _detectionTimer?.cancel();
     _steadyTimer?.cancel();
     _debounceTimer?.cancel();
-    _wsService.disconnect();
+    _stopImageStream(); // Stop image stream
+
+    // Only disconnect if we created the WebSocket service ourselves
+    if (!_wsServiceProvided) {
+      _wsService.disconnect();
+    }
   }
 
   void dispose() {
@@ -880,10 +1414,16 @@ class CameraService {
     _wsStatusSub?.cancel();
     _wsMessageSub?.cancel();
     _wsErrorSub?.cancel();
+    _periodicCaptureTimer?.cancel();
+    _stopImageStream(); // Ensure stream is stopped
     disconnect();
-    _wsService.dispose();
+
+    // Only dispose WebSocket service if we created it ourselves
+    if (!_wsServiceProvided) {
+      _wsService.dispose();
+    }
+
     _feedbackController.close();
-    _autoCaptureController.close();
-    _imageBufferPool.clear();
+    _captureController.close();
   }
 }

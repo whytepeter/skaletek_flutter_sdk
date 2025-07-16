@@ -22,11 +22,11 @@ class _HomeScreenState extends State<HomeScreen> {
     final userInfo = KYCUserInfo(
       firstName: "David",
       lastName: "Omale",
-      documentType: "PASSPORT",
+      documentType: DocumentType.passport.value,
       issuingCountry: "USA",
     );
     final customization = KYCCustomization(
-      docSrc: "LIVE",
+      docSrc: DocumentSource.live.value,
       logoUrl: null,
       partnerName: "YouTube",
       primaryColor: null,

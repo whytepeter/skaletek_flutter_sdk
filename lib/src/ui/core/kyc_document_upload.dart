@@ -5,6 +5,7 @@ import 'package:skaletek_kyc_flutter/skaletek_kyc_flutter.dart';
 import 'package:skaletek_kyc_flutter/src/models/kyc_api_models.dart';
 import 'package:skaletek_kyc_flutter/src/services/kyc_service.dart';
 import 'package:skaletek_kyc_flutter/src/services/error_handler_service.dart';
+import 'package:skaletek_kyc_flutter/src/services/websocket_service.dart';
 import 'package:skaletek_kyc_flutter/src/ui/core/camera_captuer/kyc_camera_capture.dart';
 import 'package:skaletek_kyc_flutter/src/ui/layout/content.dart';
 import 'package:skaletek_kyc_flutter/src/ui/shared/button.dart';
@@ -57,13 +58,46 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
   final GlobalKey<FileInputState> _backFileInputKey =
       GlobalKey<FileInputState>();
 
+  // WebSocket service for ML detection - only initialized for LIVE doc source
+  WebSocketService? _wsService;
+
   // Centralized error handler instance
   static final ErrorHandlerService _errorHandler = ErrorHandlerService();
 
   @override
   void initState() {
     super.initState();
+    _initializeWebSocketService();
     _initializeDocumentUpload();
+  }
+
+  /// Initialize WebSocket service for ML detection
+  /// Only connects in background when docSrc = LIVE for camera captures
+  void _initializeWebSocketService() {
+    final docSrc = widget.customization.docSrc.toUpperCase();
+
+    // Only initialize WebSocket service for LIVE camera captures
+    if (docSrc == 'LIVE') {
+      _wsService = WebSocketService();
+      // Start connection in background - camera captures will reuse this connection
+      _wsService!.connect();
+
+      // Optional: Listen to connection status for debugging
+      _wsService!.statusStream.listen((status) {
+        developer.log('WebSocket status in document upload: $status');
+      });
+
+      developer.log('WebSocket service initialized for LIVE document source');
+    } else {
+      developer.log('WebSocket service not needed for docSrc: $docSrc');
+    }
+  }
+
+  @override
+  void dispose() {
+    // Clean up WebSocket service if it was initialized
+    _wsService?.dispose();
+    super.dispose();
   }
 
   /// Initialize the document upload process by fetching presigned URLs
@@ -329,7 +363,8 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
       builder: (context) => SizedBox(
         height: MediaQuery.of(context).size.height,
         child: KYCCameraCapture(
-          onCapture: (file, {bool isAutoCapture = false}) async {
+          wsService: _wsService, // Pass WebSocket service to camera
+          onCapture: (file) async {
             final bytes = await file.readAsBytes();
             final imageFile = ImageFile(
               name: file.name,
@@ -343,34 +378,18 @@ class _KYCDocumentUploadState extends State<KYCDocumentUpload> {
               Navigator.of(context).pop();
             }
 
-            if (isAutoCapture) {
-              // For auto-capture, just set the file directly (no scan/crop)
-              developer.log(
-                'Auto capture completed for ${isFront ? 'front' : 'back'}',
+            if (isFront) {
+              _frontFileInputKey.currentState?.setFileAndScan(
+                imageFile,
+                widget.userInfo?.documentType,
+                widget.kycService,
               );
-              if (isFront) {
-                _handleFrontDocumentSelected(imageFile);
-              } else {
-                _handleBackDocumentSelected(imageFile);
-              }
             } else {
-              // For manual capture, trigger scan/crop for PASSPORT
-              developer.log(
-                'Manual capture completed for ${isFront ? 'front' : 'back'}',
+              _backFileInputKey.currentState?.setFileAndScan(
+                imageFile,
+                widget.userInfo?.documentType,
+                widget.kycService,
               );
-              if (isFront) {
-                _frontFileInputKey.currentState?.setFileAndScan(
-                  imageFile,
-                  widget.userInfo?.documentType,
-                  widget.kycService,
-                );
-              } else {
-                _backFileInputKey.currentState?.setFileAndScan(
-                  imageFile,
-                  widget.userInfo?.documentType,
-                  widget.kycService,
-                );
-              }
             }
           },
         ),
